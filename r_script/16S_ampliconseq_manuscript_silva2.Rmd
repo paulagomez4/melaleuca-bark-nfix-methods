@@ -1,0 +1,1002 @@
+---
+title: "16S amplicon seq"
+author: "Paula Gomez - SCU"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Load the Libraries
+```{r, message = FALSE, echo=FALSE, warning=FALSE}
+library(phyloseq)
+library(permute)
+library(devtools)
+library(ape)
+library(Biostrings)
+library(usethis)
+library(qiime2R)
+library(tidyverse) # Loads ggplot2, dplyr, etc.
+library(vegan)
+library(ggtree)# For tree plotting
+library(RColorBrewer)
+library(genefilter)
+library(treeio)
+library(pheatmap)
+```
+Import data and create phyloseq object
+
+```{r}
+
+otu_table_silva <- read.delim("phyloseq-export/feature-table/asv-table.tsv", skip=1, row.names=1, check.names=FALSE)
+
+otu_table_silva_matrix <-as.matrix(otu_table_silva)
+
+OTU_SILVA<- otu_table(otu_table_silva_matrix, taxa_are_rows = TRUE)
+cat("OTU table loaded. Dimensions:", dim(OTU_SILVA), "\n")
+
+taxonomy_silva<-read.delim("phyloseq-export/taxonomy/taxonomy.tsv", header=TRUE, row.names = 1, sep='\t')
+
+taxonomy_silva_split <- str_split_fixed(taxonomy_silva$Taxon, ";", n=7)
+colnames(taxonomy_silva_split) <-c("Kingdom", "Phylum", "Class", "Order", "Family", "Genus", "Species")
+# Remove the 'd__', 'p__', etc. prefixes
+# Apply this function to each column of the matrix
+taxonomy_silva_split_clean <- apply(taxonomy_silva_split, 2, function(x) gsub("^[dkpcofgs]__", "", x))
+# Ensure row names (Feature IDs) match the original taxonomy data frame
+rownames(taxonomy_silva_split_clean) <- rownames(taxonomy_silva)
+
+OLD_NAME <- "Candidatus_Eremiobacterota"
+NEW_NAME <- "Eremiobacterota"
+
+# Find all instances of the old name in the Phylum column and replace them
+taxonomy_silva_split_clean[
+  taxonomy_silva_split_clean[, "Phylum"] == OLD_NAME,
+  "Phylum"
+] <- NEW_NAME
+
+TAX_SILVA<-tax_table(taxonomy_silva_split_clean)
+cat("Taxonomy table loaded. Dimensions:", dim(TAX_SILVA), "\n")
+
+sample_data<-read.delim('phyloseq-export/metadata/sample-metadata.tsv', header=TRUE, row.names = 1, sep='\t')
+# 'replicate_group' as factor
+sample_data$replicate <- as.factor(sample_data$replicate)
+META <- sample_data(sample_data)
+cat("Sample metadata loaded. Number of samples:", nsamples(META), "\n")
+
+seqs_dna_string_set_silva <- readDNAStringSet("phyloseq-export/sequences/dna-sequences.fasta")
+REFSEQ_SILVA <- refseq(seqs_dna_string_set_silva)
+cat("Representative sequences loaded. Number of sequences:", length(REFSEQ_SILVA), "\n")
+
+# Load Phylogenetic Tree
+tree_silva <- read.tree("phyloseq-export/tree/tree.nwk")
+TREE_SILVA <- phy_tree(tree_silva)
+cat("Phylogenetic tree loaded. Number of tips:", length(tree_silva$tip.label), "\n")
+
+#Phyloseq construction
+
+ps_silva <- phyloseq(OTU_SILVA, TAX_SILVA, META, REFSEQ_SILVA, TREE_SILVA)
+```
+
+
+
+
+
+Filtering step for Kingdom and Phylum:
+```{r}
+unique(tax_table(ps_silva)[, "Kingdom"])
+table(tax_table(ps_silva)[, "Kingdom"], exclude = NULL)
+table(tax_table(ps_silva)[, "Phylum"], exclude = NULL)
+ps_silva_phylum <- subset_taxa(ps_silva, !is.na(Phylum) & !Phylum %in% c(""))
+table(tax_table(ps_silva_phylum)[, "Phylum"], exclude = NULL)
+
+```
+
+Taxonomy Bar Plots
+```{r}
+# Transform to relative abundance
+ps_rel_abund <- transform_sample_counts(ps_silva_phylum, function(x) x / sum(x))
+
+# Top 10 phyla
+top_n_phyla_count <- 10
+
+# Identify the names of the top N most abundant phyla
+top_phyla_names <- names(sort(tapply(taxa_sums(ps_rel_abund), tax_table(ps_rel_abund)[,"Phylum"], sum), decreasing=TRUE))[1:top_n_phyla_count]
+top_phyla_names
+
+# Convert the phyloseq object to a long format data frame for ggplot2
+# Aggregate to Phylum level before melting for cleaner "Other" grouping
+plot_data_phylum <- ps_rel_abund %>%
+  tax_glom(taxrank = "Phylum") %>% # Aggregate to Phylum level
+  psmelt()
+
+# Assign "Other" to phyla that are not in the top 10
+plot_data_phylum$Phylum <- ifelse(plot_data_phylum$Phylum %in% top_phyla_names,
+                                  plot_data_phylum$Phylum,
+                                  "Other")
+
+# Reorder phylum levels 
+# Put "Other" at the end of the levels
+plot_data_phylum$Phylum <- factor(plot_data_phylum$Phylum,
+                                  levels = c(top_phyla_names, "Other"))
+# new names in the same order as sample_names(ps_rel_abund)
+new_sample_names <- c("Bark-1", "Bark-2", "Bark-3") 
+
+# Replace the Sample column in plot_data_phylum
+plot_data_phylum$Sample <- new_sample_names[match(plot_data_phylum$Sample, sample_names(ps_rel_abund))]
+
+# Define a color palette
+
+num_colors_needed <- top_n_phyla_count + 1
+my_phylum_colors <- c(brewer.pal(min(top_n_phyla_count, 11), "Set3"), "grey50") # Use Set3 up to 11, then add grey for Other. Adjust if top_n_phyla_count > 11.
+if (top_n_phyla_count > 11) { # Fallback for more colors
+  my_phylum_colors <- c(colorRampPalette(brewer.pal(8, "Set2"))(top_n_phyla_count), "grey50")
+}
+
+my_phylum_colors <- brewer.pal(n = length(unique(plot_data_phylum$Phylum)), 
+                                name = "Set3")
+
+# Create the bar plot
+p_taxa_barplot <- ggplot(plot_data_phylum, aes(x=Sample, y=Abundance, fill=Phylum)) +
+  geom_bar(stat="identity", position="stack", color="black", linewidth = 0.2, width = 0.8) + # Add thin black border for definition
+  labs(
+    x = "Sample ID",
+    y = "Relative Abundance (%)",
+    fill = "Phylum") +
+  scale_fill_manual(values = my_phylum_colors) +
+  scale_y_continuous(limits = c(0, 1),
+                     breaks = seq (0, 1, 0.25),
+                     labels = scales::percent_format(accuracy = 1),
+    expand = expansion(mult = c(0.0001, 0))
+  ) +
+  scale_x_discrete(
+    expand = expansion(add = c(0.6,0.6))
+  )+
+  theme_classic(base_size = 11, base_family="sans") + 
+  theme(
+    axis.text.x = element_text(size = 9, colour="black"),
+    axis.text.y = element_text(color = "black", size = 9),
+    axis.line = element_line(colour="black", linewidth = 0.5),
+    axis.ticks = element_line(color = "black", linewidth = 0.4),
+    axis.ticks.length = unit(4, "pt"),
+    legend.text = element_text(size = 9, colour="black"),
+    panel.grid.major.x = element_blank(), # Remove vertical grid lines
+    panel.grid.minor.x = element_blank(),
+    axis.title.x = element_blank(),
+    axis.title.y = element_text(color = "black", size = 11, margin = margin(r = 8)),
+    plot.margin = margin(0, 0, 0, 0, "mm"),
+    legend.title = element_text(size = 10, colour="black", face="bold"),
+    legend.key.size=unit(4, "mm")
+)
+    
+print(p_taxa_barplot)
+
+
+
+ggsave("taxa_barplot_publication_phylum_SILVA.pdf", 
+       plot = p_taxa_barplot,
+       width = 180,    # mm (journal column width)
+       height = 120, 
+       device = cairo_pdf,
+       units = "mm",
+       dpi = 300)
+
+# High-resolution PNG (raster format - for presentations)
+ggsave("taxa_barplot_publication_phylum_SILVA.png", 
+       plot = p_taxa_barplot,
+       width = 180,
+       height = 120,
+       units = "mm",
+       dpi = 600)  
+
+```
+
+Filtering step for Class
+
+```{r}
+unique(tax_table(ps_silva_phylum)[, "Class"])
+table(tax_table(ps_silva_phylum)[, "Class"], exclude = NULL)
+ps_silva_class <- subset_taxa(ps_silva_phylum, !is.na(Class) & !Class %in% c(""))
+table(tax_table(ps_silva_class)[, "Class"], exclude = NULL)
+```
+
+
+
+Plot by class
+```{r}
+ps_rel_abund_class <- transform_sample_counts(ps_silva_class, function(x) x / sum(x))
+
+top_n_class_count <- 12
+
+top_class_names <- names(sort(tapply(taxa_sums(ps_rel_abund_class), tax_table(ps_rel_abund_class)[,"Class"], sum), decreasing=TRUE))[1:top_n_class_count]
+
+
+plot_data_class <- ps_rel_abund_class %>%
+  tax_glom(taxrank = "Class") %>% 
+  psmelt()
+
+plot_data_class$Sample <- new_sample_names[match(plot_data_class$Sample, sample_names(ps_rel_abund_class))]
+
+plot_data_class$Class <- ifelse(plot_data_class$Class %in% top_class_names,
+                                  plot_data_class$Class,
+                                  "Other")
+
+plot_data_class$Class <- factor(plot_data_class$Class,
+                                  levels = c(top_class_names, "Other"))
+
+
+num_colors_needed_class <- top_n_class_count + 1
+my_class_colors <- c(brewer.pal(min(top_n_class_count, 11), "Set3"), "grey50") 
+if (top_n_class_count > 11) { # Fallback for more colors
+  my_class_colors <- c(colorRampPalette(brewer.pal(8, "Set2"))(top_n_class_count), "grey50")
+}
+
+
+p_class_barplot <- ggplot(plot_data_class, aes(x=Sample, y=Abundance, fill=Class)) +
+  geom_bar(stat="identity", position="stack", color="black", linewidth = 0.2, width = 0.8) + # Add thin black border for definition
+  labs(
+    x = "Sample ID",
+    y = "Relative Abundance",
+    fill = "Class") +
+  scale_fill_manual(values = my_class_colors) +
+  scale_y_continuous(limits = c(0, 1),
+                     breaks = seq (0, 1, 0.25),
+                     labels = scales::percent_format(accuracy = 1),
+    expand = expansion(mult = c(0.0001, 0))
+  ) +
+  scale_x_discrete(
+    expand = expansion(add = c(0.6,0.6))
+  )+
+  theme_classic(base_size = 11, base_family="sans") + 
+  theme(
+    axis.text.x = element_text(size = 9, colour="black"),
+    axis.text.y = element_text(color = "black", size = 9),
+    axis.line = element_line(colour="black", linewidth = 0.5),
+    axis.ticks = element_line(color = "black", linewidth = 0.4),
+    axis.ticks.length = unit(4, "pt"),
+    legend.text = element_text(size = 9, colour="black"),
+    panel.grid.major.x = element_blank(), # Remove vertical grid lines
+    panel.grid.minor.x = element_blank(),
+    axis.title.x = element_blank(),
+    axis.title.y = element_text(color = "black", size = 11, margin = margin(r = 8)),
+    plot.margin = margin(5, 5, 5, 5, "mm"),
+    legend.title = element_text(size = 10, colour="black", face="bold"),
+    legend.key.size=unit(4, "mm")
+)
+    
+print(p_class_barplot)
+
+ggsave("taxa_barplot_publication_class_SILVA.pdf", 
+       plot = p_class_barplot,
+       width = 180,    # mm (journal column width)
+       height = 120, 
+       device = cairo_pdf,
+       units = "mm",
+       dpi = 300)
+
+# High-resolution PNG (raster format - for presentations)
+ggsave("taxa_barplot_publication_class_SILVA.png", 
+       plot = p_class_barplot,
+       width = 180,
+       height = 120,
+       units = "mm",
+       dpi = 600)  
+
+```
+
+
+
+
+
+```{r}
+
+# Calculate total abundance per phylum across all samples
+phylum_abundance <- ps_rel_abund %>%
+  tax_glom(taxrank = "Phylum") %>%
+  taxa_sums()
+
+# Get taxonomy table for phyla
+phylum_tax <- tax_table(tax_glom(ps_rel_abund, taxrank = "Phylum"))
+
+# Match abundances to phylum names
+phylum_totals <- tapply(phylum_abundance, phylum_tax[, "Phylum"], sum)
+top_phyla_names <- names(sort(phylum_totals, decreasing = TRUE))[1:top_n_phyla_count]
+
+cat("\nTop", top_n_phyla_count, "phyla by abundance:\n")
+print(round(sort(phylum_totals, decreasing = TRUE)[1:top_n_phyla_count] * 100, 2))
+
+
+# --- 9. Create Summary Table ---
+# Abundance table for top phyla per sample
+abundance_table <- plot_data_phylum %>%
+  group_by(Sample, Phylum) %>%
+  summarize(Abundance = sum(Abundance), .groups = "drop") %>%
+  tidyr::pivot_wider(names_from = Sample, values_from = Abundance, values_fill = 0) %>%
+  arrange(Phylum)
+
+cat("\n=== Phylum Abundance Table (Relative) ===\n")
+print(abundance_table, n = Inf)
+
+# Export table
+write.csv(abundance_table, "phylum_abundance_table.csv", row.names = FALSE)
+
+# --- 10. Calculate Summary Statistics ---
+phylum_stats <- plot_data_phylum %>%
+  filter(Phylum != "Other") %>%
+  group_by(Phylum) %>%
+  summarize(
+    Mean_Abundance = mean(Abundance),
+    SD = sd(Abundance),
+    Min = min(Abundance),
+    Max = max(Abundance),
+    CV = (sd(Abundance) / mean(Abundance)) * 100  # Coefficient of variation
+  ) %>%
+  arrange(desc(Mean_Abundance))
+
+cat("\n=== Phylum Summary Statistics ===\n")
+print(phylum_stats, n = Inf)
+
+write.csv(phylum_stats, "phylum_summary_statistics.csv", row.names = FALSE)
+
+```
+
+
+```{r}
+
+# --- 2. Get Top Classes ---
+top_n_classes <- 12  # Reasonable number for legend readability
+
+# Collapse to class level
+ps_class <- tax_glom(ps_rel_abund_class, taxrank = "Class")
+
+# Calculate total abundance per class
+class_abundance <- taxa_sums(ps_class)
+class_tax <- tax_table(ps_class)[, "Class"]
+class_totals <- tapply(class_abundance, class_tax, sum)
+
+# Get top class names
+top_class_names <- names(sort(class_totals, decreasing = TRUE))[1:top_n_classes]
+
+cat("Top", top_n_classes, "classes represent:",
+    round(sum(class_totals[top_class_names]) * 100, 1), "% of total abundance\n\n")
+
+# --- 3. Prepare Plot Data ---
+plot_data <- psmelt(ps_class)
+
+# Categorize as top classes or "Other"
+plot_data$Class <- ifelse(
+  plot_data$Class %in% top_class_names,
+  plot_data$Class,
+  "Other"
+)
+
+# Rename samples
+plot_data$Sample <- factor(
+  plot_data$Sample,
+  levels = unique(plot_data$Sample),
+  labels = c("Bark-1", "Bark-2", "Bark-3")
+)
+
+# Order classes by mean abundance
+class_order <- plot_data %>%
+  filter(Class != "Other") %>%
+  group_by(Class) %>%
+  summarize(mean_abund = mean(Abundance)) %>%
+  arrange(desc(mean_abund)) %>%
+  pull(Class)
+
+plot_data$Class <- factor(
+  plot_data$Class,
+  levels = c(class_order, "Other")
+)
+
+# Calculate "Other" percentage
+other_summary <- plot_data %>%
+  filter(Class == "Other") %>%
+  group_by(Sample) %>%
+  summarize(Other_pct = sum(Abundance) * 100)
+
+cat("'Other' category per sample:\n")
+print(other_summary)
+cat("\n")
+
+# --- 4. Color Palette ---
+# Simple, colorblind-friendly palette
+my_colors <- c(
+  colorRampPalette(brewer.pal(9, "Set3"))(top_n_classes),
+  "grey70"
+)
+names(my_colors) <- levels(plot_data$Class)
+
+# --- 5. Create Publication-Quality Barplot ---
+p_class <- ggplot(plot_data, aes(x = Sample, y = Abundance, fill = Class)) +
+  geom_bar(stat = "identity", 
+           position = "stack", 
+           color = "black", 
+           linewidth = 0.2,
+           width = 0.75) +
+  
+  # Y-axis as percentages
+  scale_y_continuous(
+    labels = scales::percent_format(accuracy = 1),
+    breaks = seq(0, 1, 0.2),
+    expand = expansion(mult = c(0, 0))
+  ) +
+  
+  # X-axis
+  scale_x_discrete(
+    expand = expansion(add = c(0, 0))
+  ) +
+  
+  # Colors
+  scale_fill_manual(values = my_colors) +
+  
+  # Labels
+  labs(
+    x = "Sample",
+    y = "Relative Abundance (%)",
+    fill = "Class"
+  ) +
+  
+  # Theme
+  theme_classic(base_size = 11) +
+  theme(
+    # Axes
+    axis.text.x = element_text(size = 10, color = "black"),
+    axis.text.y = element_text(size = 10, color = "black"),
+    axis.title.x = element_blank(),
+    axis.title.y = element_text(size = 11, color = "black", margin = margin(r = 8)),
+    axis.line = element_line(color = "black", linewidth = 0.5),
+    axis.ticks = element_line(color = "black", linewidth = 0.4),
+    axis.ticks.length = unit(2, "mm"),
+    
+    # Legend
+    legend.title = element_text(size = 11, color = "black", face = "bold"),
+    legend.text = element_text(size = 10, color = "black"),
+    legend.key.size = unit(4, "mm"),
+    legend.position = "right",
+    legend.background = element_blank(),
+    
+    # Panel
+    panel.background = element_rect(fill = "white"),
+    panel.grid = element_blank(),
+    
+    # Margins
+    plot.margin = margin(10, 10, 10, 10, "mm"),
+    plot.background = element_rect(fill = "white")
+  )
+
+print(p_class)
+
+# --- 6. Save High-Quality Outputs ---
+ggsave("class_barplot_publication_SILVA_2.pdf", p_class,
+       width = 180, height = 130, units = "mm", dpi = 300)
+
+ggsave("class_barplot_publication_SILVA_2.png", p_class,
+       width = 180, height = 130, units = "mm", dpi = 600)
+
+# --- 7. Export Abundance Table ---
+abundance_table <- plot_data %>%
+  group_by(Sample, Class, Phylum) %>%
+  summarize(Percentage = sum(Abundance) * 100, .groups = "drop") %>%
+  pivot_wider(
+    names_from = Sample,
+    values_from = Percentage,
+    values_fill = 0
+  ) %>%
+  arrange(Phylum, desc(rowSums(select(., -Class, -Phylum))))
+
+write.csv(abundance_table, "class_abundance_table_SILVA.csv", row.names = FALSE)
+
+cat("=== Class Abundance Table (with Phylum) ===\n")
+print(abundance_table, n = 20)
+
+# --- 8. Summary Statistics ---
+class_stats <- plot_data %>%
+  group_by(Class, Phylum) %>%
+  summarize(
+    Mean_pct = mean(Abundance) * 100,
+    SD_pct = sd(Abundance) * 100,
+    Min_pct = min(Abundance) * 100,
+    Max_pct = max(Abundance) * 100,
+    .groups = "drop"
+  ) %>%
+  arrange(desc(Mean_pct))
+
+write.csv(class_stats, "class_summary_statistics_SILVA.csv", row.names = FALSE)
+
+
+cat("\n=== Class Summary Statistics ===\n")
+print(class_stats, n = 20)
+
+# --- 9. Summary Report ---
+cat("\n", rep("=", 60), "\n", sep = "")
+cat("CLASS-LEVEL ANALYSIS SUMMARY\n")
+cat(rep("=", 60), "\n", sep = "")
+cat("\nTotal classes detected:", length(unique(plot_data$Class)) - 1, "\n")
+cat("Top", top_n_classes, "classes shown (+ Other category)\n")
+cat("\nFiles generated:\n")
+cat("  - class_barplot_publication.pdf/png\n")
+cat("  - class_abundance_table.csv\n")
+cat("  - class_summary_statistics.csv\n")
+cat(rep("=", 60), "\n\n", sep = "")
+```
+
+```{r}
+# --- OPTIONAL: Faceted plot by top phyla ---
+top_5_phyla <- names(sort(tapply(
+  taxa_sums(ps_rel_abund_class), 
+  tax_table(ps_rel_abund_class)[, "Phylum"], 
+  sum
+), decreasing = TRUE))[1:3]
+
+plot_data_facet <- plot_data %>%
+  filter(Phylum %in% top_5_phyla, Class != "Other") %>%
+  mutate(Phylum = factor(Phylum, levels = top_5_phyla))
+
+p_class_faceted <- ggplot(plot_data_facet, 
+                          aes(x = Sample, y = Abundance, fill = Class)) +
+  geom_bar(stat = "identity", position = "stack", 
+           color = "black", linewidth = 0.2) +
+  
+  facet_wrap(~ Phylum, nrow = 1) +
+  
+  scale_y_continuous(
+    labels = scales::percent_format(accuracy = 1),
+    expand = expansion(mult = c(0, 0.02))
+  ) +
+  
+  scale_fill_manual(values = my_colors) +
+  
+  labs(x = NULL, y = "Relative Abundance (%)") +
+  
+  theme_classic(base_size = 11, base_family="sans") +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 9, colour="black"),
+    axis.text.y = element_text(size =9, colour="black"),
+    axis.title.y = element_text(size=11, colour = "black", margin = margin(r=8)),
+    axis.title.x = element_blank(),
+    legend.position = "right",
+    legend.key.size = unit(4, "mm"),
+    plot.margin = margin(0, 0, 0, 0, "mm"),
+    strip.background = element_rect(fill = "grey90", color = "black"),
+    strip.text = element_text(face = "bold", size = 9),
+    legend.title = element_text(size = 10, colour="black", face="bold"),
+    legend.text = element_text(size = 9, colour="black"),
+    panel.grid.major.x = element_blank(), # Remove vertical grid lines
+    panel.grid.minor.x = element_blank(),
+        axis.ticks = element_line(color = "black", linewidth = 0.4),
+    axis.ticks.length = unit(4, "pt"),
+     axis.line = element_line(colour="black", linewidth = 0.5)
+  )
+print(p_class_faceted)
+
+ggsave("class_by_phylum_faceted_SILVA.pdf", p_class_faceted,
+       width = 250, height = 120, units = "mm", dpi = 300)
+ggsave("class_by_phylum_faceted_SILVA.png", p_class_faceted,
+       width = 180, height = 130, units = "mm", dpi = 600)
+```
+#Put the figures together
+
+```{r}
+library(patchwork)
+figure_taxonomy <- (p_taxa_barplot / p_class_faceted)+
+  plot_annotation(tag_levels = 'a') &
+  theme(plot.tag = element_text(face = "bold", size = 14, hjust = 0, vjust = 1))
+ggsave("figure_taxonomy_publication.pdf", plot = figure_taxonomy, 
+        width = 160, height = 190, units = "mm", dpi = 300, device = cairo_pdf)
+ggsave("figure_taxonomy_publication.png", 
+       plot = figure_taxonomy, 
+       width = 160, height =190 , units = "mm", dpi = 300)
+
+
+
+```
+
+
+```{r}
+# Collapse at desired level (e.g., Phylum)
+ps_phylum <- tax_glom(ps_rel_abund, taxrank = "Phylum")
+
+# Melt into long format
+df_phylum <- psmelt(ps_phylum)
+
+# Summarize relative abundance per sample (convert to %)
+phylum_table <- df_phylum %>%
+  group_by(Sample, Phylum) %>%
+  summarize(Percentage = sum(Abundance) * 100, .groups = "drop") %>%
+  tidyr::pivot_wider(
+    names_from = Sample,
+    values_from = Percentage,
+    values_fill = 0
+  )
+
+# Save to CSV
+write.csv(phylum_table, "phylum_percentages.csv", row.names = FALSE)
+
+print(phylum_table, n = Inf)
+
+# Summarize mean ± SD across samples
+phylum_summary <- df_phylum %>%
+  group_by(Phylum) %>%
+  summarize(
+    Mean = mean(Abundance) * 100,          # mean %
+    SD   = sd(Abundance) * 100,            # standard deviation
+    Min  = min(Abundance) * 100,           # minimum
+    Max  = max(Abundance) * 100,           # maximum
+    CV   = (sd(Abundance) / mean(Abundance)) * 100,  # coefficient of variation
+    .groups = "drop"
+  ) %>%
+  arrange(desc(Mean))
+
+write.csv(phylum_summary, "phylum_summary_mean_sd.csv", row.names = FALSE)
+
+print(phylum_summary, n = Inf)
+
+
+```
+
+```{r}
+# Collapse at Class level
+ps_class <- tax_glom(ps_rel_abund_class, taxrank = "Class")
+
+df_class <- psmelt(ps_class)
+
+class_table <- df_class %>%
+  group_by(Sample, Phylum, Class) %>%
+  summarize(Percentage = sum(Abundance) * 100, .groups = "drop") %>%
+  tidyr::pivot_wider(
+    names_from = Sample,
+    values_from = Percentage,
+    values_fill = 0
+  )
+
+write.csv(class_table, "class_percentages.csv", row.names = FALSE)
+
+print(class_table, n = Inf)
+
+class_summary_2 <- df_class %>%
+  group_by(Phylum,Class) %>%
+  summarize(
+    Mean = mean(Abundance) * 100,
+    SD   = sd(Abundance) * 100,
+    Min  = min(Abundance) * 100,
+    Max  = max(Abundance) * 100,
+    CV   = (sd(Abundance) / mean(Abundance)) * 100,
+    .groups = "drop"
+  ) %>%
+  arrange(desc(Mean))
+
+write.csv(class_summary_2, "class_summary_mean_sd.csv", row.names = FALSE)
+
+print(class_summary_2, n = Inf)
+
+```
+
+```{r}
+# Collapse at Order level
+ps_order <- tax_glom(ps_rel_abund, taxrank = "Order")
+
+df_order <- psmelt(ps_order)
+
+order_table <- df_order %>%
+  group_by(Sample, Phylum, Class, Order) %>%
+  summarize(Percentage = sum(Abundance) * 100, .groups = "drop") %>%
+  tidyr::pivot_wider(
+    names_from = Sample,
+    values_from = Percentage,
+    values_fill = 0
+  )
+
+write.csv(order_table, "order_percentages.csv", row.names = FALSE)
+
+print(order_table, n = Inf)
+
+
+order_summary <- df_order %>%
+  group_by(Phylum, Class, Order) %>%
+  summarize(
+    Mean = mean(Abundance) * 100,
+    SD   = sd(Abundance) * 100,
+    Min  = min(Abundance) * 100,
+    Max  = max(Abundance) * 100,
+    CV   = (sd(Abundance) / mean(Abundance)) * 100,
+    .groups = "drop"
+  ) %>%
+  arrange(desc(Mean))
+
+write.csv(order_summary, "order_summary_mean_sd.csv", row.names = FALSE)
+
+print(order_summary, n = Inf)
+```
+
+```{r}
+ps_family <- tax_glom(ps_rel_abund, taxrank = "Family")
+
+df_family <- psmelt(ps_family)
+
+family_table <- df_family %>%
+  group_by(Sample, Phylum, Class, Order, Family) %>%
+  summarize(Percentage = sum(Abundance) * 100, .groups = "drop") %>%
+  tidyr::pivot_wider(
+    names_from = Sample,
+    values_from = Percentage,
+    values_fill = 0
+  )
+
+write.csv(family_table, "family_percentages.csv", row.names = FALSE)
+
+print(family_table, n = Inf)
+
+
+family_summary <- df_family %>%
+  group_by(Phylum, Class, Order, Family) %>%
+  summarize(
+    Mean = mean(Abundance) * 100,
+    SD   = sd(Abundance) * 100,
+    Min  = min(Abundance) * 100,
+    Max  = max(Abundance) * 100,
+    CV   = (sd(Abundance) / mean(Abundance)) * 100,
+    .groups = "drop"
+  ) %>%
+  arrange(desc(Mean))
+
+write.csv(family_summary, "family_summary_mean_sd.csv", row.names = FALSE)
+
+print(family_summary, n = Inf)
+```
+
+```{r}
+ps_genus <- tax_glom(ps_rel_abund, taxrank = "Genus")
+
+df_genus <- psmelt(ps_genus)
+
+genus_table <- df_genus %>%
+  group_by(Sample, Phylum, Class, Order, Family, Genus) %>%
+  summarize(Percentage = sum(Abundance) * 100, .groups = "drop") %>%
+  tidyr::pivot_wider(
+    names_from = Sample,
+    values_from = Percentage,
+    values_fill = 0
+  )
+
+write.csv(genus_table, "genus_percentages.csv", row.names = FALSE)
+
+print(genus_table, n = Inf)
+
+
+genus_summary <- df_genus %>%
+  group_by(Phylum, Class, Order, Family, Genus) %>%
+  summarize(
+    Mean = mean(Abundance) * 100,
+    SD   = sd(Abundance) * 100,
+    Min  = min(Abundance) * 100,
+    Max  = max(Abundance) * 100,
+    CV   = (sd(Abundance) / mean(Abundance)) * 100,
+    .groups = "drop"
+  ) %>%
+  arrange(desc(Mean))
+
+write.csv(genus_summary, "genus_summary_mean_sd.csv", row.names = FALSE)
+
+print(genus_summary, n = Inf)
+
+
+
+```
+
+
+
+
+```{r}
+
+
+# Extract the taxonomy table and OTU table from your phyloseq object
+tax_table_df <- as.data.frame(tax_table(ps_silva_class))
+otu_table_df <- as.data.frame(otu_table(ps_silva_class))
+
+# Identify methanotroph taxa (Methylovirgula and Methylocapsa)
+methanotroph_genera <- c("Methylovirgula", "Methylocapsa")
+methanotroph_taxa <- rownames(tax_table_df)[tax_table_df$Genus %in% methanotroph_genera]
+
+cat("Number of methanotroph ASVs/OTUs found:", length(methanotroph_taxa), "\n")
+if(length(methanotroph_taxa) > 0) {
+  cat("Methanotroph genera present:\n")
+  print(table(tax_table_df[methanotroph_taxa, "Genus"]))
+}
+
+# Calculate total reads per sample
+total_reads <- colSums(otu_table_df)
+
+# Calculate methanotroph reads per sample
+if(length(methanotroph_taxa) > 0) {
+  # If only one methanotroph taxon, convert to matrix to avoid dimension issues
+  methanotroph_reads <- colSums(otu_table_df[methanotroph_taxa, , drop = FALSE])
+} else {
+  methanotroph_reads <- rep(0, ncol(otu_table_df))
+  names(methanotroph_reads) <- colnames(otu_table_df)
+}
+
+# Calculate percentage
+methanotroph_percentage <- (methanotroph_reads / total_reads) * 100
+
+# Create results data frame
+results_df <- data.frame(
+  Sample = names(methanotroph_percentage),
+  Total_Reads = total_reads,
+  Methanotroph_Reads = methanotroph_reads,
+  Methanotroph_Percentage = methanotroph_percentage
+)
+
+# Display results
+cat("\n=== Methanotroph Abundance Results ===\n")
+print(results_df)
+
+# Summary statistics
+cat("\nSummary of methanotroph percentages across samples:\n")
+print(summary(results_df$Methanotroph_Percentage))
+
+```
+
+
+```{r}
+
+alpha_metrics <- estimate_richness(ps_silva, measures=c("Observed", "Shannon", "Faith_PD"))
+alpha_metrics
+
+
+alpha_df <- data.frame(sample_data(ps_silva), alpha_metrics)
+
+p_shannon <- ggplot(alpha_df, aes(x=replicate, y=Shannon)) +
+  geom_boxplot(width=0.3, outlier.shape = NA) + # Boxplot (outlier.shape=NA to handle points separately)
+  geom_jitter(width=0.1, height=0, alpha=0.8, size=3, aes(color=replicate)) + # Show individual points
+  labs(
+    x="Replicate Group",
+    y="Shannon Diversity Index",
+    title="Alpha Diversity (Shannon Index)"
+  ) +
+  scale_color_brewer(palette = "Set1") + # Use a color palette for points
+  theme_minimal() +
+  theme(
+    legend.position = "none", # Hide legend as x-axis provides info
+    axis.title = element_text(size = 12, face = "bold"),
+    plot.title = element_text(size = 14, face = "bold", hjust = 0.5),
+    axis.text.x = element_text(size = 11, face = "bold") # Make group label bold
+  )
+
+print(p_shannon)
+ggsave("alpha_diversity_shannon.png", p_shannon, width=6, height=5, dpi=300)
+ggsave("alpha_diversity_shannon.pdf", p_shannon, width=6, height=5)
+
+
+p_observed <- ggplot(alpha_df, aes(x=replicate, y=Observed)) +
+  geom_boxplot(width=0.3, outlier.shape = NA) +
+  geom_jitter(width=0.1, height=0, alpha=0.8, size=3, aes(color=replicate)) +
+  labs(
+    x="Replicate Group",
+    y="Observed ASVs",
+    title="Alpha Diversity (Observed ASVs)"
+  ) +
+  scale_color_brewer(palette = "Set1") +
+  theme_minimal() +
+  theme(
+    legend.position = "none",
+    axis.title = element_text(size = 12, face = "bold"),
+    plot.title = element_text(size = 14, face = "bold", hjust = 0.5),
+    axis.text.x = element_text(size = 11, face = "bold")
+  )
+
+print(p_observed)
+ggsave("alpha_diversity_observed_SILVA.png", p_observed, width=6, height=5, dpi=300)
+ggsave("alpha_diversity_observed_SILVA.pdf", p_observed, width=6, height=5)
+
+
+
+
+```
+
+
+
+```{r}
+
+
+ord_bray <- ordinate(ps_silva, method = "PCoA", distance = "bray")
+p_bray<-plot_ordination(ps_silva, ord_bray, color = "replicate") +
+geom_point(aes(fill = replicate), size = 4.5, shape = 21, color = "black", stroke = 0.5) + 
+theme_classic(base_size = 11, base_family = "sans") +
+  theme(
+    axis.title = element_text(color = "black", size = 11, margin = margin(r = 8)),
+    plot.margin = margin(5, 5, 5, 5, "mm"),
+    axis.text = element_text(size = 9, colour = "black"),
+    legend.position = 'none', 
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_rect(colour = "black", fill=NA, linewidth=0.5),
+     axis.ticks = element_line(color = "black", linewidth = 0.4),
+    axis.ticks.length = unit(4, "pt")
+  )
+  print(p_bray)
+ggsave("p_bray_beta_diversity.png", p_bray, width=7, height=6, dpi=300)
+ggsave("p_bray_beta_diversity.pdf", p_bray, width=7, height=6)
+
+ord_wu <- ordinate(ps_silva, method = "PCoA", distance = "unifrac", weighted = TRUE)
+print(ord_wu)
+p_wu <- plot_ordination(ps_silva, ord_wu, color = "replicate") +
+geom_point(aes(fill = replicate), size = 4.5, shape = 21, color = "black", stroke = 0.5) + 
+  labs(
+    x = paste0("PC1 [", round(ord_wu$values$Eigenvalues[1] / sum(ord_wu$values$Eigenvalues) * 100, 2), "%]"),
+    y = paste0("PC2 [", round(ord_wu$values$Eigenvalues[2] / sum(ord_wu$values$Eigenvalues) * 100, 2), "%]"),
+    color = "Group",
+    fill = "Group"
+  ) +
+  theme_classic(base_size = 11, base_family = "sans") +
+  theme(
+    axis.title = element_text(color = "black", size = 11, margin = margin(r = 8)),
+    plot.margin = margin(5, 5, 5, 5, "mm"),
+    axis.text = element_text(size = 9, colour = "black"),
+    legend.position = 'none', 
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_rect(colour = "black", fill=NA, linewidth=0.5),
+     axis.ticks = element_line(color = "black", linewidth = 0.4),
+    axis.ticks.length = unit(4, "pt")
+  )
+
+print(p_wu)
+ggsave("p_wu_beta_diversity.png", p_wu, width=7, height=6, dpi=300)
+ggsave("p_wu_beta_diversity.pdf", p_wu, width=7, height=6)
+
+```
+
+
+
+
+```{r}
+# Number of samples
+
+# Number of taxa
+ntaxa(ps_silva)
+
+# Total reads
+sum(otu_table_silva)
+
+# Amount of 0 values
+sum(OTU_SILVA==0)
+
+# Percentage of 0 values
+sum(OTU_SILVA==0) / (dim(OTU_SILVA)[1] * dim(OTU_SILVA)[2]) * 100
+
+# Histogram
+hist(as(t(OTU_SILVA), "matrix"), 
+     max(t(OTU_SILVA)), 
+     right = FALSE, 
+     las = 1, 
+     xlab = "Occurrence value", 
+     ylab = "Frequency", 
+     main = "Occurrence frequency")
+
+min(colSums(OTU_SILVA))
+
+# Plot a quick and dirty rarecurve, step indicates the sample size used to estimate the curve
+# Use this to pick suitable depth.
+rarecurve(as(t(otu_table(ps_silva)), "matrix"), step = 500, cex = 0.5, ylab = "NTU")
+
+# Quick plot of sample depth
+sum_seq <- rowSums(t(OTU_SILVA))
+plot(sum_seq, 
+     ylim = c(0, 40000), 
+     main = c('Number of counts per sample'), 
+     xlab = c('Samples'))
+sum_seq
+min(sum_seq)
+max(sum_seq)
+```
+
+
+
+
+
+
+
+
