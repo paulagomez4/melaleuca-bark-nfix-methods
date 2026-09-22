@@ -1,0 +1,850 @@
+---
+title: "Pilot_CH4_paperbark"
+author: "Paula Gomez - SCU"
+date: "`r Sys.Date()`"
+output:
+  word_document: default
+  keep_tex: false
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r cars, echo=FALSE, warning=FALSE, message=FALSE}
+library(tidyverse)
+library(lme4)
+library(Matrix)
+library(dplyr)
+library(rstatix)
+library(lmerTest)
+library(car)
+library(emmeans)
+library(nlme)
+library(lme4)
+library(stats)
+library(MASS)
+library(performance)
+library(DHARMa)
+library(ggplot2)
+library(ggpubr)
+
+```
+
+#Read the data
+
+```{r}
+
+bark_data_2025 <- read.csv('Data/data_CH4.csv', stringsAsFactors = TRUE)
+```
+
+# Research Questions:
+
+-   Differences between treatments
+-   Differences between time steps
+
+# View the data and structure the data:
+
+- Clean up the data:
+
+```{r}
+bark_data_2025$incubation_time<-as.factor(bark_data_2025$incubation_time)
+
+str(bark_data_2025)
+
+```
+
+- We have two reading of the IRMS per sample, so we make an average for d15N and average for N fix rates (ngN/g/day):
+
+```{r, message=FALSE}
+av_15N_bark_data_2025 <- bark_data_2025 %>% 
+  group_by(ID, treatment, incubation_time) %>% 
+  summarise(across(d15N,mean))
+
+av_Nfix_bark_data_2025 <- bark_data_2025 %>% 
+  group_by(ID, treatment, incubation_time) %>% 
+  summarise(across(ngN_g_day,mean))
+
+av_Nfix2_bark_data_2025 <- bark_data_2025 %>% 
+  group_by(ID, treatment, incubation_time) %>% 
+  summarise(across(ngN_g_day_2,mean))
+```
+
+- Summarise the data
+
+```{r}
+summary_Nfix_bark_data_2025 <- av_Nfix_bark_data_2025 %>% group_by(treatment, incubation_time) %>% 
+  dplyr::summarise(
+    mean_Nfix = mean(ngN_g_day), 
+    min_Nfix = min(ngN_g_day),
+    max_Nfix = max(ngN_g_day),
+    se_Nfix = sd(ngN_g_day)/sqrt(n())
+  )
+print(summary_Nfix_bark_data_2025)
+write.table(summary_Nfix_bark_data_2025, "summary_Nfix_bark_data_2025.txt", sep = "\t")
+
+summary_Nfix2_bark_data_2025 <- av_Nfix2_bark_data_2025 %>% group_by(treatment, incubation_time) %>% 
+  dplyr::summarise(
+    mean_Nfix = mean(ngN_g_day_2), 
+    min_Nfix = min(ngN_g_day_2),
+    max_Nfix = max(ngN_g_day_2),
+    se_Nfix = sd(ngN_g_day_2)/sqrt(n())
+  )
+print(summary_Nfix2_bark_data_2025)
+write.table(summary_Nfix2_bark_data_2025, "summary_Nfix2_bark_data_2025.txt", sep = "\t")
+
+summary_d15N_bark_data_2025 <- av_15N_bark_data_2025 %>% group_by(treatment, incubation_time) %>% 
+  dplyr::summarise(
+    mean_d15N = mean(d15N), 
+    min_d15N = min(d15N),
+    max_d15N = max(d15N),
+    se_d15N = sd(d15N)/sqrt(n())
+  )
+print(summary_d15N_bark_data_2025)
+write.table(summary_d15N_bark_data_2025, "summary_d15N_bark_data_2025.txt", sep = "\t")
+
+```
+
+
+Publication Fig 4
+
+```{r}
+av_15N_bark_data_2025$treatment <- factor(av_15N_bark_data_2025$treatment)
+levels(av_15N_bark_data_2025$treatment)[levels(av_15N_bark_data_2025$treatment) == "15N2_CH4_O2"] <- 
+"CH4 + O2"
+levels(av_15N_bark_data_2025$treatment)[levels(av_15N_bark_data_2025$treatment) == "15N2"] <- 
+"O2"
+av_15N_bark_data_2025$treatment <- factor(av_15N_bark_data_2025$treatment, 
+                                levels = c("O2", 
+                                          "CH4 + O2", 
+                                          "Control"))
+
+treatment_colors <- c(
+  "O2" = "#009E73",
+  "CH4 + O2" = "#D55E00",
+  "Control" =  "#0072B2")
+
+
+p_d15N_CH4 <- ggplot(av_15N_bark_data_2025, aes(x = factor(incubation_time), y = d15N, fill = treatment)) +
+  geom_boxplot(position = position_dodge(width = 0.8),
+               outlier.shape = NA,
+               width = 0.6,
+               alpha = 0.7,
+               linewidth = 0.4,
+               color = "black") +
+  geom_point(aes(fill = treatment),
+             position = position_jitterdodge(jitter.width = 0, dodge.width = 0.8),
+             size = 1.8,
+             alpha = 0.8,
+             shape = 21,
+             color = "black",
+             stroke = 0.4) +
+  geom_vline(
+    xintercept = c(1.5, 2.5, 3.5, 4.5), # Halfway between 1&2 and 2&4 (if 4 is the 3rd factor level)
+    linetype = "dotted",
+    color = "black",
+    linewidth = 0.3
+  ) +
+  scale_fill_manual(values = treatment_colors, 
+                    name = "Treatment",
+                    labels = c(expression(O[2]), expression(CH[4]~+~O[2]), "Control"),
+                    breaks = c("O2", "CH4 + O2", "Control"),
+                    expand = expansion(add = 0.5)) +
+  
+  labs(y = expression(delta^{15}*N~("\u2030")),
+       x = "Incubation time (days)") +
+    scale_y_continuous(limits = c(0, 150),
+    expand = expansion(mult = c(0.02, 0.05))
+  ) +
+  theme_bw(base_size = 9) +
+  theme(
+    text = element_text(family = "sans", color="black"),   # Use Arial font
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_rect(color="black", fill=NA, linewidth = 0.5),
+    axis.ticks = element_line(color = "black", linewidth = 0.4),
+    axis.ticks.length = unit(2, "pt"),
+    axis.text.x = element_text(color = "black", size = 9),
+    axis.text.y = element_text(color = "black", size = 9),
+    axis.title.y = element_text(color = "black", size = 11, margin = margin(r=5)),
+    axis.title.x = element_text(color = "black", size = 11, margin = margin(t = 5)),
+    legend.position = c(0.01, 0.99), 
+    legend.justification = c(0, 1),
+    legend.title = element_blank(),
+    legend.text = element_text(color = "black", size = 8),
+    legend.text.align = 0,
+    legend.background = element_blank(),
+    legend.spacing.y = unit(1, "mm"),
+    legend.box.spacing = unit(1, "mm"),
+    plot.margin = margin(5, 5, 5, 5, "mm"),
+    legend.key.size = unit(4, "mm"),
+  )
+
+  ggsave("d15N_CH4.png", 
+         plot = p_d15N_CH4, 
+         width = 180, height = 130, units = "mm", dpi = 300)
+  
+ggsave("d15N_CH4.pdf",
+       plot = p_d15N_CH4,
+       width = 180, height = 130, units = "mm",
+       device = cairo_pdf,
+       dpi = 300)
+
+  print(p_d15N_CH4)
+
+```
+
+
+
+```{r}
+av_Nfix2_bark_data_2025$treatment <- factor(av_Nfix2_bark_data_2025$treatment)
+levels(av_Nfix2_bark_data_2025$treatment)[levels(av_Nfix2_bark_data_2025$treatment) == "15N2_CH4_O2"] <- 
+"CH4 + O2"
+levels(av_Nfix2_bark_data_2025$treatment)[levels(av_Nfix2_bark_data_2025$treatment) == "15N2"] <- 
+"O2"
+av_Nfix2_bark_data_2025$treatment <- factor(av_Nfix2_bark_data_2025$treatment, 
+                                levels = c("O2", 
+                                          "CH4 + O2", 
+                                          "Control"))
+# Define color palette
+treatment_colors <- c(
+  "O2" = "#009E73",
+  "CH4 + O2" = "#D55E00",
+  "Control" =  "#0072B2")
+
+# Plot
+p_Nfix_CH4 <- ggplot(av_Nfix2_bark_data_2025, aes(x = factor(incubation_time), y = ngN_g_day_2, fill = treatment)) +
+  geom_boxplot(position = position_dodge(width = 0.8),
+               outlier.shape = NA,
+               width = 0.6,
+               alpha = 0.7,
+               linewidth = 0.4,
+               color = "black") +
+  geom_point(aes(fill = treatment),
+             position = position_jitterdodge(jitter.width = 0, dodge.width = 0.8),
+             size = 1.8,
+             alpha = 0.8,
+             shape = 21,
+             color = "black",
+             stroke = 0.4) +
+  geom_vline(
+    xintercept = c(1.5, 2.5, 3.5, 4.5), # Halfway between 1&2 and 2&4 (if 4 is the 3rd factor level)
+    linetype = "dotted",
+    color = "black",
+    linewidth = 0.3
+  ) +
+  scale_fill_manual(values = treatment_colors, 
+                    name = "Treatment",
+                    labels = c(expression(O[2]), expression(CH[4]~+~O[2]), "Control"),
+                    breaks = c("O2", "CH4 + O2", "Control"),
+                    expand = expansion(add = 0.5)) +
+  
+  labs(y = expression(N~fixation~rate~(ng~N~g^{-1}~day^{-1})),
+       x = "Incubation time (days)") +
+    scale_y_continuous(limits = c(0, 350),
+    expand = expansion(mult = c(0.02, 0.05))
+  ) +
+  theme_bw(base_size = 9) +
+  theme(
+    text = element_text(family = "sans", color="black"),   # Use Arial font
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_rect(color="black", fill=NA, linewidth = 0.5),
+    axis.ticks = element_line(color = "black", linewidth = 0.4),
+    axis.ticks.length = unit(2, "pt"),
+    axis.text.x = element_text(color = "black", size = 9),
+    axis.text.y = element_text(color = "black", size = 9),
+    axis.title.y = element_text(color = "black", size = 11, margin = margin(r=5)),
+    axis.title.x = element_text(color = "black", size = 11, margin = margin(t = 5)),
+    legend.position = c(0.01, 0.99), 
+    legend.justification = c(0, 1),
+    legend.title = element_blank(),
+    legend.text = element_text(color = "black", size = 8),
+    legend.text.align = 0,
+    legend.background = element_blank(),
+    legend.spacing.y = unit(1, "mm"),
+    legend.box.spacing = unit(1, "mm"),
+    plot.margin = margin(5, 5, 5, 5, "mm"),
+    legend.key.size = unit(4, "mm"),
+  )
+
+  ggsave("Nfix_CH4.png", 
+         plot = p_Nfix_CH4, 
+         width = 180, height = 130, units = "mm", dpi = 300)
+  
+ggsave("Nfix_CH4.pdf",
+       plot = p_Nfix_CH4,
+       width = 180, height = 130, units = "mm",
+       device = cairo_pdf,
+       dpi = 300)
+
+  print(p_Nfix_CH4)
+```
+
+Plot CH4 with O2: 
+```{r}
+o2_data <- read.csv('Data/data_O2_CH4.csv', stringsAsFactors = TRUE)
+
+Nfix_O2_data_2025 <- merge(av_Nfix2_bark_data_2025, 
+                                  o2_data[, c("ID", "O2_.")], 
+                                  by = "ID", 
+                                  all.x = TRUE)
+
+
+Nfix_O2_data_2025 <- Nfix_O2_data_2025[Nfix_O2_data_2025$treatment != "Control", ]
+
+Nfix_O2_data_2025$treatment <- factor(Nfix_O2_data_2025$treatment, 
+                                             levels = c("O2", "CH4 + O2"))
+
+
+treatment_colors <- c(
+  "O2" = "#009E73",
+  "CH4 + O2" = "#D55E00")
+
+
+oxygen_summary <- Nfix_O2_data_2025 %>%
+  group_by(treatment, incubation_time) %>%
+  summarise(
+    mean_oxygen = mean(O2_., na.rm = TRUE),
+    se_oxygen = sd(O2_., na.rm = TRUE) / sqrt(n()),
+    .groups = 'drop'
+  )
+
+
+scaling_factor <- 350/20
+
+# Plot with secondary axis for oxygen
+p_Nfix_vs_O2_CH4 <- ggplot(Nfix_O2_data_2025, aes(x = factor(incubation_time), y = ngN_g_day_2, fill = treatment)) +
+   # Add horizontal lines for O2 reference levels
+  geom_hline(yintercept = 2 * scaling_factor, 
+             linetype = "dashed", 
+             color = "gray50", 
+             linewidth = 0.5) +
+  geom_hline(yintercept = 13.8 * scaling_factor, 
+             linetype = "dashed", 
+             color = "gray50", 
+             linewidth = 0.5) +
+  geom_boxplot(position = position_dodge(width = 0.8),
+               outlier.shape = NA,
+               width = 0.6,
+               alpha = 0.8,
+               linewidth = 0.4,
+               color = "black") +
+  geom_point(aes(fill = treatment),
+             position = position_jitterdodge(jitter.width = 0, dodge.width = 0.8),
+             size = 1.8,
+             alpha = 0.8,
+             shape = 21,
+             color = "black",
+             stroke = 0.4) +
+  geom_vline(
+    xintercept = c(1.5, 2.5, 3.5, 4.5),
+    linetype = "dotted",
+    color = "black",
+    linewidth = 0.3
+  ) +
+  geom_line(data = oxygen_summary,
+            aes(y = mean_oxygen * scaling_factor,
+                x = factor(incubation_time),
+                color = treatment,
+                group = treatment),
+            linewidth = 0.8,
+            inherit.aes = FALSE) +
+  # Add SE error bars
+  geom_errorbar(data = oxygen_summary,
+                aes(y = mean_oxygen * scaling_factor,
+                    ymin = (mean_oxygen - se_oxygen) * scaling_factor,
+                    ymax = (mean_oxygen + se_oxygen) * scaling_factor,
+                    x = factor(incubation_time),
+                    color = treatment),
+                width = 0.15,
+                linewidth = 0.4,
+                color = "black",
+                inherit.aes = FALSE) +
+  # Add oxygen mean points
+  geom_point(data = oxygen_summary,
+             aes(y = mean_oxygen * scaling_factor,
+                 x = factor(incubation_time),
+                 fill = treatment),
+             size = 2.5,
+             shape = 23,
+             color = "black",
+             stroke = 0.6,
+             inherit.aes = FALSE) +
+     # Add text labels for O2 reference lines
+  annotate("text", x = 2.7, y = 1 * scaling_factor, 
+           label = expression(O[2]~inner~bark), 
+           hjust = 0, vjust = -0.5, size = 3, color = "gray20") +
+  annotate("text", x = 3.7, y = 13.8 * scaling_factor, 
+           label = expression(O[2]~middle~bark), 
+           hjust = 0, vjust = -0.5, size = 3, color = "gray20") +
+  scale_fill_manual(values = treatment_colors, 
+                    name = "Treatment",
+                    labels = c(expression(O[2]), expression(CH[4]~+~O[2])),
+                    breaks = c("O2", "CH4 + O2")) +
+  scale_color_manual(values = treatment_colors,
+                     name = expression(O[2]~concentration),
+                     labels = c(expression(O[2]), expression(CH[4]~+~O[2])),
+                     breaks = c("O2", "CH4 + O2")) +
+  scale_y_continuous(
+    limits = c(0, 350),
+    expand = expansion(mult = c(0.02, 0.05)),
+    sec.axis = sec_axis(~./scaling_factor, name = expression(O[2]~concentration~("%")),
+                        breaks = seq(0, 20, by =5))
+  ) +
+  labs(y = expression(N~fixation~rate~(ng~N~g^{-1}~day^{-1})),
+       x = "Incubation time (days)") +
+  guides(
+    fill = guide_legend(order = 1, 
+                        override.aes = list(shape = 21, size = 1.8, alpha = 0.8)),
+    color = guide_legend(order = 2,
+                         override.aes = list(linetype = 1, linewidth = 0.8, shape = 23, size = 3, stroke = 0.6, fill = treatment_colors, color=treatment_colors))
+  ) +
+  theme_bw(base_size = 9) +
+  theme(
+    text = element_text(family = "sans", color="black"),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_rect(color="black", fill=NA, linewidth = 0.5),
+    axis.ticks = element_line(color = "black", linewidth = 0.4),
+    axis.ticks.length = unit(2, "pt"),
+    axis.text.x = element_text(color = "black", size = 9),
+    axis.text.y = element_text(color = "black", size = 9),
+    axis.text.y.right = element_text(color = "black", size = 9),
+    axis.title.y = element_text(color = "black", size = 11, margin = margin(r=5)),
+    axis.title.y.right = element_text(color = "black", size = 11, margin = margin(l=5)),
+    axis.title.x = element_text(color = "black", size = 11, margin = margin(t = 5)),
+    legend.position = c(0.01, 0.99), 
+    legend.justification = c(0, 1),
+    legend.title = element_blank(),
+    legend.text = element_text(color = "black", size = 10),
+    legend.text.align = 0,
+    legend.background = element_blank(),
+    legend.spacing.y = unit(0.5, "mm"),
+    legend.box.spacing = unit(0.5, "mm"),
+    plot.margin = margin(5, 5, 5, 5, "mm"),
+    legend.key.size = unit(4, "mm"),
+    legend.key = element_rect(fill = "white", color = NA)
+  )
+
+ggsave("Nfix_vs_O2_CH4_v2.png", 
+       plot = p_Nfix_vs_O2_CH4, 
+       width = 180, height = 130, units = "mm", dpi = 300)
+
+ggsave("Nfix_vs_O2_CH4_v2.pdf",
+       plot = p_Nfix_vs_O2_CH4,
+       width = 180, height = 130, units = "mm",
+       device = cairo_pdf,
+       dpi = 300)
+
+print(p_Nfix_vs_O2_CH4)
+```
+
+
+- Anova
+```{r}
+#anova BNF rate
+anova_bark_2025_2<-aov(ngN_g_day_2~treatment+incubation_time+treatment*incubation_time, data=av_Nfix2_bark_data_2025)
+summary(anova_bark_2025_2)
+#anova d15N
+anova_d115N_2025<-aov(d15N~treatment+incubation_time+treatment*incubation_time, data=av_15N_bark_data_2025)
+summary(anova_d115N_2025)
+```
+- Assumptions
+```{r}
+#Assumptions BNF
+residuals_bark_2025_2<-residuals(anova_bark_2025_2)
+qqnorm(residuals_bark_2025_2)
+qqline(residuals_bark_2025_2, col = "red")
+hist(residuals_bark_2025_2)
+shapiro.test(residuals_bark_2025_2)
+leveneTest(ngN_g_day_2~treatment*incubation_time, data=av_Nfix2_bark_data_2025)
+
+#Assumptions d15N
+residuals_d15N_2025<-residuals(anova_d115N_2025)
+qqnorm(residuals_d15N_2025)
+qqline(residuals_d15N_2025, col = "red")
+hist(residuals_d15N_2025)
+shapiro.test(residuals_d15N_2025)
+leveneTest(d15N~treatment*incubation_time, data=av_15N_bark_data_2025)
+```
+
+Data not normal, lets do a transformation:
+
+```{r}
+lm_model <- lm(ngN_g_day_2 ~ treatment * incubation_time, data= av_Nfix2_bark_data_2025)
+summary(lm_model)
+
+shapiro.test(residuals(lm_model))
+
+Boxcox_Result <- boxcox(lm_model)
+
+lambda_best <- Boxcox_Result$x[which.max(Boxcox_Result$y)]
+print(lambda_best)
+
+av_Nfix2_bark_data_2025$boxcox_transformed <- (av_Nfix2_bark_data_2025$ngN_g_day_2^lambda_best - 1) / lambda_best
+
+anova_model_N15_transformed <- aov(boxcox_transformed~ treatment*incubation_time, data = av_Nfix2_bark_data_2025)
+
+summary(anova_model_N15_transformed)
+residuals_N15_transformed<-residuals(anova_model_N15_transformed)
+
+qqnorm(residuals_N15_transformed)
+qqline(residuals_N15_transformed, col = "red")
+hist(residuals_N15_transformed)
+shapiro.test(residuals_N15_transformed)
+
+leveneTest(boxcox_transformed~ treatment , data = av_Nfix2_bark_data_2025)
+
+emm_15N_aov_transformed <- emmeans(anova_model_N15_transformed, ~ treatment)
+pw_comp_15N_aov_transformed <- pairs(emm_15N_aov_transformed, adjust = "tukey")
+print(pw_comp_15N_aov_transformed)
+write.table(pw_comp_15N_aov_transformed, "pairwise_results_15N_aov_transformed.txt", sep = "\t")
+
+AIC(anova_model_N15_transformed)
+```
+
+- Let's try with an GLM (better option, data not normal and AIC lower with GLM than lm)
+
+```{r}
+#GLM for BNF
+glm_model <- glm(ngN_g_day_2 ~ treatment * incubation_time, 
+                     family = Gamma(link = "log"), 
+                     data = av_Nfix2_bark_data_2025)
+summary(glm_model)
+anova(glm_model, type = "II", test.statistic = "Chisq")
+write.table(anova(glm_model, type = "III", test.statistic = "Chisq"), "anova_glm_nfix.txt", sep = "\t")
+AIC(lm_model,glm_model)
+
+
+```
+
+-   Check assumptions of GLM
+
+```{r}
+#Assumptions BNF
+sim_res <- simulateResiduals(glm_model)
+plot(sim_res)
+
+
+ggplot(data.frame(x1=av_Nfix2_bark_data_2025$treatment, pearson=residuals(glm_model, type="pearson")),
+       aes(x=av_Nfix2_bark_data_2025$treatment, y=pearson))+geom_point() +theme_bw()
+plot(glm_model)
+shapiro.test(residuals(glm_model))
+leveneTest(glm_model)
+
+
+# Deviance residuals
+plot(glm_model$fitted.values, residuals(glm_model, type = "deviance"),
+     xlab = "Fitted Values", ylab = "Deviance Residuals")
+abline(h = 0, lty = 2)
+
+# Pearson residuals
+plot(glm_model$fitted.values, residuals(glm_model, type = "pearson"),
+     xlab = "Fitted Values", ylab = "Pearson Residuals")
+abline(h = 0, lty = 2)
+
+
+```
+
+## Pairwise comparisons:
+
+```{r}
+# BNF for treatment comparisons at each time point
+emm.trt.time <- emmeans(glm_model, ~ treatment | incubation_time)
+pairs.trt.by.time <- pairs(emm.trt.time, adjust = "BH")
+summary_trt_by_time <- summary(pairs.trt.by.time, type = "response")
+
+# BNF for time comparisons within each treatment
+emm.time.by.trt <- emmeans(glm_model, ~ incubation_time | treatment)
+pairs.time.by.trt <- pairs(emm.time.by.trt, adjust = "BH")
+summary_time_by_trt <- summary(pairs.time.by.trt, type = "response")
+
+print("Pairwise Comparisons between Treatments at Each Incubation Time:")
+print(summary_trt_by_time)
+write.table(summary_trt_by_time, "summary_trt_by_time.txt", sep = "\t")
+
+print("\nPairwise Comparisons between Incubation Times within Each Treatment:")
+print(summary_time_by_trt)
+write.table(summary_time_by_trt, "summary_time_by_trt.txt", sep = "\t")
+
+
+```
+
+# Oxygen data
+#Read the data
+
+```{r}
+
+d15N_O2_data_2025 <- merge(av_15N_bark_data_2025, 
+                                  o2_data[, c("ID", "O2_.")], 
+                                  by = "ID", 
+                                  all.x = TRUE)
+
+# Filter out Control treatment
+Nfix_O2_data_2025 <- Nfix_O2_data_2025[Nfix_O2_data_2025$treatment != "Control", ]
+
+d15N_O2_data_2025$treatment <- factor(d15N_O2_data_2025$treatment)
+levels(d15N_O2_data_2025$treatment)[levels(d15N_O2_data_2025$treatment) == "15N2_CH4_O2"] <- 
+"CH4 + O2"
+levels(d15N_O2_data_2025$treatment)[levels(d15N_O2_data_2025$treatment) == "15N2"] <- 
+"O2"
+
+d15N_O2_data_2025$treatment <- factor(d15N_O2_data_2025$treatment, 
+                                             levels = c("O2", "CH4 + O2"))
+
+```
+- Summarise the data
+```{r}
+summary_O2_data <- o2_data %>% group_by(treatment, incubation_time) %>% 
+  dplyr::summarise(
+    mean_O2 = mean(O2_.), 
+    min_O2 = min(O2_.),
+    max_O2 = max(O2_.),
+    se_O2 = sd(O2_.)/sqrt(n())
+  )
+print(summary_O2_data)
+write.table(summary_O2_data, "summary_O2_data.txt", sep = "\t")
+```
+
+## Anova and assumptions
+```{r}
+anova_O2<-aov(O2_.~treatment+incubation_time+treatment*incubation_time, data=o2_data)
+summary(anova_O2)
+
+residuals_O2<-residuals(anova_O2)
+qqnorm(residuals_O2)
+qqline(residuals_O2, col = "red")
+hist(residuals_O2)
+shapiro.test(residuals_O2)
+leveneTest(O2_.~treatment, data=o2_data)
+```
+
+- Pairwise comparisons
+```{r}
+
+# treatment comparisons at each time point
+emm_O2_trt_time <- emmeans(anova_O2, ~ treatment | incubation_time)
+pairs_O2_trt_by_time <- pairs(emm_O2_trt_time, adjust = "BH")
+summary_O2_trt_by_time <- summary(pairs_O2_trt_by_time, type = "response")
+
+# comparisons between incubation times within each treatment
+emm_O2_time_trt <- emmeans(anova_O2, ~ incubation_time | treatment)
+
+pairs_O2_time_by_trt <- pairs(emm_O2_time_trt, adjust = "BH")
+summary_O2_time_by_trt <- summary(pairs_O2_time_by_trt, type = "response")
+
+print("O2 Pairwise Comparisons between Treatments at Each Incubation Time:")
+print(summary_O2_trt_by_time)
+write.table(summary_O2_trt_by_time, "summary_O2_trt_by_time.txt", sep = "\t")
+
+print("\n O2 Pairwise Comparisons between Incubation Times within Each Treatment:")
+print(summary_O2_time_by_trt)
+write.table(summary_O2_time_by_trt, "summary_O2_time_by_trt.txt", sep = "\t")
+```
+
+- Calculate correlation BNF and O2
+
+```{r}
+
+ggscatter(Nfix_O2_data_2025, x = "O2_.", y = "ngN_g_day_2", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "pearson",
+          xlab = "O2 %", ylab = "BNF rate (ng N/g/day)")
+
+shapiro.test(Nfix_O2_data_2025$O2_.)
+shapiro.test(Nfix_O2_data_2025$ngN_g_day_2)
+
+ggqqplot(Nfix_O2_data_2025$O2_., ylab = "O2 %")
+
+ggqqplot(Nfix_O2_data_2025$ngN_g_day_2, ylab = "BNF rate")
+
+#Data is not normal so we use spearman method:
+
+correlation <- cor.test(Nfix_O2_data_2025$ngN_g_day_2, Nfix_O2_data_2025$O2_., method = "spearman")
+correlation
+
+#Separating correlations by treatment:
+
+correlations_by_treatment <- Nfix_O2_data_2025 %>%
+  group_by(treatment) %>%
+  group_map(~ broom::tidy(cor.test(.x$O2_., .x$ngN_g_day_2, method = "spearman")) %>%
+              mutate(treatment = unique(.x$treatment)),
+            .keep = TRUE) %>%
+  bind_rows()
+
+cor_annotation <- correlations_by_treatment %>%
+  mutate(
+    label = paste0("rho = ", round(estimate, 2), "\n", "p = ", format.pval(p.value, digits = 2)),
+    x = 5,  # or adjust as needed
+    y = max(Nfix_O2_data_2025$ngN_g_day_2, na.rm = TRUE) * 0.95
+  )
+cor_annotation
+write.table(cor_annotation, "cor_annotation_BNF_O2.txt", sep = "\t")
+```
+- Plot
+
+```{r}
+scatter_plot_BNF_O2 <- ggplot(Nfix_O2_data_2025, aes(x = O2_., y = ngN_g_day_2, color = treatment)) +
+  geom_point(size = 3, alpha = 0.7) + 
+  labs(
+    x = "Oxygen Concentration (%)",
+    y = "Nitrogen Fixation Rate (ng N/g/day)") +
+  theme_bw() +
+  theme(
+    plot.title = element_text(hjust = 0.5), # Center the title
+    axis.title.x = element_text(face = "bold", size = 12),
+    axis.title.y = element_text(face = "bold", size = 12),
+    axis.text.x = element_text(size = 10),
+    axis.text.y = element_text(size = 10),
+  panel.grid.major = element_blank(),
+  panel.grid.minor = element_blank()
+  ) +
+  annotate(
+    "text",
+    x = min(Nfix_O2_data_2025$O2_.), # Adjust x position as needed
+    y = max(Nfix_O2_data_2025$ngN_g_day_2), # Adjust y position as needed
+    hjust = 0, # Left-justify text
+    vjust = 1, # Top-justify text
+    label = paste("Spearman's rho =", round(correlation$estimate, 2),
+                  "\np-value =", format(correlation$p.value, digits = 3)),
+    size = 4,
+    color = "darkred" 
+  )
+
+print(scatter_plot_BNF_O2)
+
+
+ggsave(filename = "scatter_plot_BNF_O2.png",
+       plot = scatter_plot_BNF_O2,
+       width = 8,
+       height = 6,
+       units = "in",
+       dpi = 600) 
+```
+
+- No correlation with N fixation. However, I could check correlation with d15N: 
+```{r}
+ggscatter(d15N_O2_data_2025, x = "O2_.", y = "d15N", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "pearson",
+          xlab = "O2 %", ylab = "d15N")
+
+shapiro.test(d15N_O2_data_2025$O2_.)
+shapiro.test(d15N_O2_data_2025$d15N)
+
+ggqqplot(d15N_O2_data_2025$O2_., ylab = "O2 %")
+
+ggqqplot(d15N_O2_data_2025$d15N, ylab = "d15N")
+
+#Data is not normal so we use spearman method:
+
+cor_all <- cor.test(d15N_O2_data_2025$O2_., d15N_O2_data_2025$d15N, 
+                    method = "spearman", exact = FALSE)
+
+cor_O2 <- cor.test(d15N_O2_data_2025$O2_.[d15N_O2_data_2025$treatment == "O2"], 
+                   d15N_O2_data_2025$d15N[d15N_O2_data_2025$treatment == "O2"], 
+                   method = "spearman", exact = FALSE)
+
+cor_CH4_O2 <- cor.test(d15N_O2_data_2025$O2_.[d15N_O2_data_2025$treatment == "CH4 + O2"], 
+                       d15N_O2_data_2025$d15N[d15N_O2_data_2025$treatment == "CH4 + O2"], 
+                       method = "spearman", exact = FALSE)
+cor_all
+cor_O2
+cor_CH4_O2
+
+```
+- Plot
+
+```{r}
+legend_line <- data.frame(
+  O2_. = c(0, 20),  
+  d15N = c(0, 120),
+  treatment = "All data",  
+  legend_group = "All data"
+)
+p_correlation_d15N_O2 <- ggplot(d15N_O2_data_2025, aes(x = O2_., y = d15N, color = treatment, fill = treatment)) +
+  geom_line(data = legend_line, aes(x=O2_., y = d15N, linetype = legend_group), color = "black", linewidth = 1.2, inherit.aes = FALSE)+
+  # Add regression lines for each treatment
+  geom_smooth(method = "lm", se = FALSE, linewidth = 1, alpha = 0.8) +
+  # Add regression line for all data (black dashed)
+  geom_smooth(aes(x = O2_., y = d15N), 
+              method = "lm", se = FALSE, 
+              color = "black", linetype = "dashed", linewidth = 1.2,
+              inherit.aes = FALSE) +
+  # Add points
+  geom_point(size = 3.5, alpha = 0.8, shape = 21, color = "black", stroke = 0.5) +
+  # Add correlation text for all data (top left)
+  annotate("text", x = 0.5,
+           y = 120,
+           label = sprintf("Spearman's rho = %.2f\np-value = %.6f", 
+                          cor_all$estimate, cor_all$p.value),
+           hjust = 0, vjust = 1, size = 3.5, fontface = "bold") +
+  # Add correlation text for CH4 + O2 (blue-gray)
+  annotate("text", x = 0.5, 
+           y = 90,
+           label = sprintf("rho = %.2f\np = %.5f", 
+                          cor_CH4_O2$estimate, cor_CH4_O2$p.value),
+           hjust = 0, vjust = 1, size = 3.5, fontface = "bold", color = treatment_colors["CH4 + O2"]) +
+  # Add correlation text for O2 (green)
+  annotate("text", x = 1,
+           y = 15,
+           label = sprintf("rho = %.2f\np = %.3f", 
+                          cor_O2$estimate, cor_O2$p.value),
+           hjust = 0, vjust = 1, size = 3.5, fontface = "bold", color =treatment_colors["O2"]) +
+  scale_color_manual(values = treatment_colors,
+                     labels = c(expression(O[2]), 
+                               expression(CH[4]~+~O[2])),
+                     name = NULL) +
+  scale_fill_manual(values = treatment_colors,
+                    labels = c(expression(O[2]), 
+                              expression(CH[4]~+~O[2])), 
+                    name = NULL) +
+  scale_linetype_manual(
+    values = c("All data" = "dashed"),
+    labels = c("All data"),
+    name = NULL) +
+  scale_x_continuous(limits = c(0, 15), breaks = seq(0, 15, by = 5)) +
+  labs(x = expression(O[2]~("%")),
+       y = expression(delta^{15}*N~("‰"))) +
+  theme_bw(base_size = 10) +
+  theme(
+    text = element_text(family = "sans", color = "black"),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_rect(color = "black", fill = NA, linewidth = 0.5),
+    axis.ticks = element_line(color = "black", linewidth = 0.4),
+    axis.text = element_text(color = "black", size = 10),
+    axis.title = element_text(color = "black", size = 11),
+    legend.position = c(0.98, 0.98),
+    legend.justification = c(1, 1),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 10),
+    legend.background = element_rect(fill = "white", color = NA),
+    legend.key.size = unit(5, "mm"),
+    legend.spacing.y = unit(0, "mm"),
+    lengend.box.spacing = unit(0, "mm"),
+    plot.margin = margin(5, 5, 5, 5, "mm"))+
+  guides(
+    color = guide_legend(order = 1, override.aes = list(shape = 21, fill = treatment_colors)),
+    fill = "none",
+    linetype = guide_legend(order=2)
+  )
+
+ggsave("spearman_correlation_d15N_O2.png", 
+       plot = p_correlation_d15N_O2, 
+       width = 140, height = 120, units = "mm", dpi = 300)
+
+ggsave("spearman_correlation_d15N_O2.pdf",
+       plot = p_correlation_d15N_O2,
+       width = 140, height = 120, units = "mm",
+       device = cairo_pdf,
+       dpi = 300)
+
+print(p_correlation_d15N_O2)
+
+
+```
+
