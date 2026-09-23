@@ -19,14 +19,11 @@ Raw nitrogen-fixation and experimental data (.csv) underlying the manuscript's A
 
 ### `qiime2_outputs/`
 
-QIIME 2 (v2025.7) artifacts generated from 16S rRNA amplicon sequencing of *Melaleuca quinquenervia* bark (3 replicate samples: Bark-1, Bark-2, Bark-3), processed with the DADA2 plugin (forward reads truncated at 250 bp, reverse at 210 bp) and classified against the SILVA 138 database using a Naive Bayes classifier (`classify-sklearn`, plant-surface weighted variant).
+File exports of the QIIME 2 (v2025.7) processing outputs for the 16S rRNA amplicon sequencing of *Melaleuca quinquenervia* bark (3 replicate samples: Bark-1, Bark-2, Bark-3), processed with the DADA2 plugin (forward reads truncated at 250 bp, reverse at 210 bp) and classified against the SILVA 138 database using a Naive Bayes classifier (`classify-sklearn`, plant-surface weighted variant).
 
-- `feature-table.qza` — ASV feature table (`FeatureTable[Frequency]`)
-- `rep-seqs.qza` — representative ASV sequences (`FeatureData[Sequence]`)
-- `taxonomy.qza` — SILVA 138 taxonomic assignments (`FeatureData[Taxonomy]`)
-- `rooted-tree.qza` — rooted phylogenetic tree, MAFFT alignment + FastTree (`Phylogeny[Rooted]`)
+Raw QIIME 2 artifacts (`.qza`) are not included in this repository. The underlying raw sequencing reads are deposited separately in NCBI SRA (BioProject PRJNA1533092); together with the processing parameters stated above and in the Methods, the QIIME 2 pipeline can be rerun from the raw reads if the full artifact provenance is needed.
 
-`qiime2_outputs/phyloseq-export/` — the same four artifacts exported to flat files, in the exact folder structure the R script below reads directly:
+`qiime2_outputs/phyloseq-export/` — the files the R script below reads directly:
 
 ```
 phyloseq-export/
