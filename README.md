@@ -17,13 +17,13 @@ Raw nitrogen-fixation and experimental data (.csv) underlying the manuscript's A
 - `data_CH4.csv` — δ15N and BNF rates from the CH4-addition experiment (5% CH4, March 2025): 15N2 + CH4 + O2, 15N2 + O2, and autoclaved Control treatments, at 1/2/3/5/7-day incubations (Control at days 3 and 7 only). Underlies Figure 3 and Tables S8–S10.
 - `data_O2_CH4.csv` — Headspace O2 (%) measured in the same CH4-addition experiment vials. Underlies Figure 3 and Tables S11–S12, and the O2 vs δ15N correlation (Figure 4).
 
-### `qiime2_outputs/`
+### `phyloseq-export/`
 
 File exports of the QIIME 2 (v2025.7) processing outputs for the 16S rRNA amplicon sequencing of *Melaleuca quinquenervia* bark (3 replicate samples: Bark-1, Bark-2, Bark-3), processed with the DADA2 plugin (forward reads truncated at 250 bp, reverse at 210 bp) and classified against the SILVA 138 database using a Naive Bayes classifier (`classify-sklearn`, plant-surface weighted variant).
 
 Raw QIIME 2 artifacts (`.qza`) are not included in this repository. The underlying raw sequencing reads are deposited separately in NCBI SRA (BioProject PRJNA1533092); together with the processing parameters stated above and in the Methods, the QIIME 2 pipeline can be rerun from the raw reads if the full artifact provenance is needed.
 
-`qiime2_outputs/phyloseq-export/` — the files the R script below reads directly:
+`phyloseq-export/` — the files the R script below reads directly:
 
 ```
 phyloseq-export/
