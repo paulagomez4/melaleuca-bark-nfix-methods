@@ -1,0 +1,867 @@
+---
+title: "ARA_vs_15N2_data_analysis_2025"
+author: "Paula Gomez - SCU"
+output:
+  pdf_document: default
+  html_document: default
+  word_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Acetylene Reduction Assay
+
+## Read the data sets from ARA:
+```{r, results='hide',echo=FALSE, warning=FALSE, message=FALSE}
+library(dplyr)
+library(ggplot2)
+library(purrr)
+library(emmeans)
+library(car)
+library(MASS)
+library(tidyr)
+library(permute)
+library(lattice)
+library(rstatix)
+library(patchwork)
+library(DHARMa)
+```
+
+## Read the data sets from ARA:
+```{r}
+ARA <- read.csv("Data/ARA_data_publication.csv", stringsAsFactors = TRUE)
+
+```
+
+- Research question How does time and treatment affect N fixation using ARA
+- Variables - Treatment, Time, N fixation (ngN/g/day)
+
+## View the data and structure the data
+
+```{r}
+ARA$incubation_time_days <- as.factor(ARA$incubation_time_days)
+ARA_reduced <- ARA %>% dplyr::select(ID, Treatment, Concentration_ppm, incubation_time_days, ngN_g_day)
+ARA_reduced <- ARA_reduced %>% 
+  rename(
+    Nfix_rate_ngN_g_day = ngN_g_day,
+  )
+
+ARA_reduced$Treatment <- factor(ARA_reduced$Treatment)
+levels(ARA_reduced$Treatment)[levels(ARA_reduced$Treatment) == "15N2_C2H2_CK"] <- "Stem gas"
+levels(ARA_reduced$Treatment)[levels(ARA_reduced$Treatment) == "15N2_C2H2_Air"] <- "Air"
+levels(ARA_reduced$Treatment)[levels(ARA_reduced$Treatment) == "15N2_CK_CT"] <- "endogenous control"
+levels(ARA_reduced$Treatment)[levels(ARA_reduced$Treatment) == "15N2_C2H2_CK_microCT"] <- "Control"
+levels(ARA_reduced$Treatment)[levels(ARA_reduced$Treatment) == "15N2_C2H2_CK_nobarkCT"]<- "no bark control"
+
+
+```
+## Visualise the data
+- Summarise data: N fix rate (ng N/g/day)
+
+```{r}
+ARA_ngN_g_day_groupby_treatment_time <- ARA_reduced %>% group_by(Treatment, incubation_time_days) %>% 
+  dplyr::summarise(
+    mean_Nfix = mean(Nfix_rate_ngN_g_day), 
+    min_Nfix = min(Nfix_rate_ngN_g_day),
+    max_Nfix = max(Nfix_rate_ngN_g_day),
+    se_Nfix = sd(Nfix_rate_ngN_g_day)/sqrt(n())
+  )
+
+print(ARA_ngN_g_day_groupby_treatment_time)
+write.table(ARA_ngN_g_day_groupby_treatment_time, "ARA_ngN_g_day_groupby_treatment_time.txt", sep = "\t")
+
+```
+
+
+- Only treatments and negative control
+```{r}
+ARA_summary_treatments<- ARA_ngN_g_day_groupby_treatment_time %>% 
+  filter(Treatment %in% c('Stem gas','Air', 'Control'))
+print(ARA_summary_treatments)
+write.table(ARA_summary_treatments, "ARA_summary_treatments.txt", sep = "\t")
+
+```
+
+
+##Plot the data
+
+- Ethylene ppm
+
+```{r}
+
+ARA_groupby_ethylene_ppm <- ARA_reduced %>% group_by(Treatment, incubation_time_days) %>% 
+  dplyr::summarise(
+    mean_ppm = mean(Concentration_ppm), 
+    min_ppm = min(Concentration_ppm),
+    max_ppm = max(Concentration_ppm),
+    se_ppm = sd(Concentration_ppm)/sqrt(n())
+  )
+
+print(ARA_groupby_ethylene_ppm)
+write.table(ARA_groupby_ethylene_ppm, "ARA_groupby_ethylene_ppm.txt", sep = "\t")
+
+```
+
+
+
+## Hypothesis testing
+- Remove the treatments that we are not interested in testing. We only leave the negative control (sterile):
+```{r}
+ARA_reduced_no_ct <- ARA_reduced[!(ARA_reduced$Treatment %in% c("endogenous control", "no bark control")), ]
+print(ARA_reduced_no_ct)
+str(ARA_reduced_no_ct)
+
+```
+
+```{r}
+# Define color palette
+treatment_colors <- c(
+  "Air" = "#009E73",   # bluish green
+  "Stem gas"      = "#D55E00",   # vermillion
+  "Control"  = "#0072B2"    # blue
+)
+
+# Plot
+p_C2H4_days <- ggplot(ARA_reduced_no_ct, aes(x = incubation_time_days, y = Concentration_ppm, fill = Treatment)) +
+  geom_boxplot(position = position_dodge(width = 0.75),
+               outlier.shape = NA,
+               width = 0.6,
+               alpha = 0.7,
+               linewidth = 0.5,
+               color = "black") +
+  geom_point(aes(fill = Treatment),
+             position = position_jitterdodge(jitter.width = 0, dodge.width = 0.75),
+             size = 2,
+             alpha = 0.8,
+             shape = 21,
+             color = "black",
+             stroke = 0.5) +
+  scale_fill_manual(values = treatment_colors, 
+                    name = "Treatment",
+                    breaks = c("Air", "Stem gas", "Control")) +
+  
+  labs(y = expression(C[2]~H[4]~"concentration (ppm)"),
+       x = "Incubation time (days)") +
+    scale_y_continuous(limits = c(0, 30),
+    expand = expansion(mult = c(0.05, 0.1))
+  ) +
+  theme_bw(base_size = 9) +
+  theme(
+    text = element_text(family = "sans", color="black"),   # Use Arial font
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_rect(color="black", fill=NA, linewidth = 0.5),
+    axis.ticks = element_line(color = "black", linewidth = 0.4),
+    axis.ticks.length = unit(2, "pt"),
+    axis.text.x = element_text(color = "black", size = 9),
+    axis.text.y = element_text(color = "black", size = 9),
+    axis.title.y = element_text(color = "black", size = 11, margin = margin(r=5)),
+    axis.title.x = element_text(color = "black", size = 11, margin = margin(t = 5)),
+    legend.position = c(0.02, 0.98), 
+    legend.justification = c(0, 1),
+    legend.title = element_blank(),
+    legend.text = element_text(color = "black", size = 9),
+    legend.background = element_blank(),
+    legend.spacing.y = unit(0.5, "mm"),
+    legend.box.spacing = unit(1, "mm"),
+    plot.margin = margin(5, 5, 5, 5, "mm"),
+    legend.key.size = unit(5, "mm"),
+  )
+
+  ggsave("Nfix_C2H4_Fig1.png", 
+         plot = p_C2H4_days, 
+         width = 140, height = 110, units = "mm", dpi = 300)
+  
+ggsave("Nfix_C2H4_Fig1.pdf",
+       plot = p_C2H4_days,
+       width = 140, height = 110, units = "mm",
+       device = cairo_pdf,
+       dpi = 300)
+
+  print(p_C2H4_days)
+
+
+```
+
+
+Plot ARA for publication:
+
+```{r}
+
+# Define color palette
+treatment_colors <- c(
+  "Air" = "#009E73",   # bluish green
+  "Stem gas"      = "#D55E00",   # vermillion
+  "Control"  = "#0072B2"    # blue
+)
+
+# Plot
+p_ARA_days <- ggplot(ARA_reduced_no_ct, aes(x = incubation_time_days, y = Nfix_rate_ngN_g_day, fill = Treatment)) +
+  geom_boxplot(position = position_dodge(width = 0.75),
+               outlier.shape = NA,
+               width = 0.6,
+               alpha = 0.7,
+               linewidth = 0.5,
+               color = "black") +
+  geom_point(aes(fill = Treatment),
+             position = position_jitterdodge(jitter.width = 0, dodge.width = 0.75),
+             size = 2,
+             alpha = 0.8,
+             shape = 21,
+             color = "black",
+             stroke = 0.5) +
+  scale_fill_manual(values = treatment_colors, 
+                    name = "Treatment",
+                    breaks = c("Air", "Stem gas", "Control")) +
+  
+  # 1. Horizontal line segment (Bar)
+  annotate(
+    "segment",
+    x = 2.61, xend = 3.11, 
+    y = 65, yend = 65, 
+    color = "black", 
+    linewidth = 0.5
+  ) +
+  
+  # 2. Vertical tick marks
+  annotate(
+    "segment",
+    x = 2.61, xend = 2.61, 
+    y = 63, yend = 63, 
+    color = "black", 
+    linewidth = 0.5
+  ) +
+  annotate(
+    "segment",
+    x = 3.11, xend = 3.11, 
+    y = 63, yend = 63, 
+    color = "black", 
+    linewidth = 0.5
+  ) +
+  annotate(
+    "text",
+    x = (2.61+3.11)/2, y = 66, 
+    label = "***", 
+    color = "black", 
+    size = 3.5 
+  ) +
+  labs(y = expression(N~fixation~rate~(ng~N~g^{-1}~day^{-1})),
+       x = "Incubation time (days)") +
+    scale_y_continuous(limits = c(0, 67),
+    expand = expansion(mult = c(0.0001, 0.05))
+  ) +
+  theme_bw(base_size = 9) +
+  theme(
+    text = element_text(family = "sans", color="black"),   # Use Arial font
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_rect(color="black", fill=NA, linewidth = 0.5),
+    axis.ticks = element_line(color = "black", linewidth = 0.4),
+    axis.ticks.length = unit(2, "pt"),
+    axis.text.x = element_text(color = "black", size = 9),
+    axis.text.y = element_text(color = "black", size = 9),
+    axis.title.y = element_text(color = "black", size = 11, margin = margin(r=5)),
+    axis.title.x = element_text(color = "black", size = 11, margin = margin(t = 5)),
+    legend.position = c(0.02, 0.98), 
+    legend.justification = c(0, 1),
+    legend.title = element_blank(),
+    legend.text = element_text(color = "black", size = 9),
+    legend.background = element_blank(),
+    legend.spacing.y = unit(0.5, "mm"),
+    legend.box.spacing = unit(1, "mm"),
+    plot.margin = margin(5, 5, 5, 5, "mm"),
+    legend.key.size = unit(5, "mm"),
+  )
+
+ggsave("Nfix_ARA_Fig1_v2.png", 
+         plot = p_ARA_days, 
+         width = 140, height = 110, units = "mm", dpi = 300)
+  
+ggsave("Nfix_ARA_Fig1.pdf",
+       plot = p_ARA_days,
+       width = 140, height = 110, units = "mm",
+       device = cairo_pdf,
+       dpi = 300)
+
+  print(p_ARA_days)
+
+
+  
+
+```
+
+```{r}
+plot_ARA_combined <- (p_C2H4_days / p_ARA_days)
+
+  ggsave("plot_ARA_fig1.png", 
+         plot = plot_ARA_combined, 
+         width = 140, height = 210, units = "mm", dpi = 300)
+  
+ggsave("plot_ARA_fig1.pdf",
+       plot = plot_ARA_combined,
+       width = 140, height = 210, units = "mm",
+       device = cairo_pdf,
+       dpi = 300)
+```
+
+- 2-Way ANOVA with Treatment and Time as fixed factors
+```{r}
+anova_ARA<-aov(Nfix_rate_ngN_g_day~Treatment+incubation_time_days+Treatment*incubation_time_days, data=ARA_reduced_no_ct)
+summary(anova_ARA)
+
+
+
+```
+  - Check for ANOVA assumptions (normality and homogeneity of variance)
+```{r}
+residuals_ARA<-residuals(anova_ARA)
+qqnorm(residuals_ARA)
+qqline(residuals_ARA, col = "red")
+hist(residuals_ARA)
+shapiro.test(residuals_ARA)
+leveneTest(Nfix_rate_ngN_g_day~Treatment*incubation_time_days, data=ARA_reduced_no_ct)
+```
+
+- Post-hoc comparison using Tukey's test. Separating effects (time and treatment). Better option:
+```{r}
+
+emm_ARA_by_time <- emmeans(anova_ARA, ~ Treatment | incubation_time_days)
+pw_comp_ARA_by_time <- pairs(emm_ARA_by_time, adjust = "tukey")
+print(pw_comp_ARA_by_time)
+write.table(pw_comp_ARA_by_time, "pairwise_results_ARA_by_time.txt", sep = "\t")
+
+emm_ARA_by_treatment <- emmeans(anova_ARA, ~ incubation_time_days | Treatment)
+pw_comp_ARA_by_treatment <- pairs(emm_ARA_by_treatment, adjust = "tukey")
+print(pw_comp_ARA_by_treatment)
+write.table(pw_comp_ARA_by_treatment, "pairwise_results_ARA_by_treatment.txt", sep = "\t")
+
+```
+
+
+# 15N2 method 
+## Read the data:
+
+```{r}
+
+N15 <- read.csv("Data/15N_data.csv", stringsAsFactors = TRUE)
+```
+
+## How does time and treatment affect N fixation using 15N2 method
+
+## Variables - Treatment, Time, N fixation (ng/g/day)
+
+## View the data and structure the data
+
+- Reduce the data set to the columns we are interested in:
+```{r}
+N15$incubation_time_days <- as.factor(N15$incubation_time_days)
+N15_reduced <-N15 %>% dplyr::select(ID, av_d15N,Treatment,incubation_time_days, ngN_g_day)
+```
+
+- Change the name of variables and treatments and remove the rows we are not interested in (natural abundance)
+```{r}
+
+N15_reduced$Treatment <- factor(N15_reduced$Treatment)
+levels(N15_reduced$Treatment)[levels(N15_reduced$Treatment) == "C2H2 + CK"] <- "C2H2 + Stem gas"
+levels(N15_reduced$Treatment)[levels(N15_reduced$Treatment) == "Cocktail"] <- "Stem gas"
+levels(N15_reduced$Treatment)[levels(N15_reduced$Treatment) == "Control + CK"]<- "Control"
+levels(N15_reduced$Treatment)[levels(N15_reduced$Treatment) == "CK + CH4-3"]<- "Stem gas + CH4"
+levels(N15_reduced$Treatment)[levels(N15_reduced$Treatment) == "DFM + CK"]<- "DFM"
+
+```
+
+
+## Visualisation of the data:
+- Summarise the data (mean, min, max and SE)
+```{r}
+N15_BNF_summary <- N15_reduced %>% group_by(Treatment, incubation_time_days) %>% 
+  dplyr::summarise(
+    mean_Nfix = mean(ngN_g_day), 
+    min_Nfix = min(ngN_g_day),
+    max_Nfix = max(ngN_g_day),
+    se_Nfix = sd(ngN_g_day)/sqrt(n())
+  )
+print(N15_BNF_summary)
+write.table(N15_BNF_summary, "N15_BNF_summary.txt", sep = "\t")
+
+N15_d15N_summary <- N15_reduced %>% group_by(Treatment, incubation_time_days) %>% 
+  dplyr::summarise(
+    mean_d15N = mean(av_d15N), 
+    min_d15N = min(av_d15N),
+    max_d15N = max(av_d15N),
+    se_d15N = sd(av_d15N)/sqrt(n())
+  )
+print(N15_d15N_summary)
+write.table(N15_d15N_summary, "N15_d15N_summary.txt", sep = "\t")
+
+```
+
+- Summarise only 4 days:
+
+```{r}
+
+N15_BNF_summary_4days<- N15_BNF_summary %>% 
+  filter(incubation_time_days == '4')
+
+```
+
+
+Plot for publication Figure 3: 
+```{r}
+
+N15_reduced$Treatment <- factor(N15_reduced$Treatment, 
+                                levels = c("C2H2 + Air", 
+                                          "C2H2 + Stem gas", 
+                                          "Air", 
+                                          "Stem gas", 
+                                          "Stem gas + CH4", 
+                                          "DFM", 
+                                          "Control"))
+
+
+full_treatment_colors <- c(
+  "C2H2 + Air"      = "#AA3377",  # Purple
+  "C2H2 + Stem gas" = "#EE6677",  # Red/Pink
+  "Air"             = "#4477AA",  # Blue
+  "Stem gas"        = "#CCBB44",  # Yellow
+  "Stem gas + CH4"  = "#009988",  # Teal (CVD-safe)
+  "DFM"             = "#BBBBBB",  # Grey
+  "Control"         = "#66CCEE"   # Cyan
+)
+
+
+full_treatment_colors_publication <- c(
+  "C2H2 + Air"      = "#CC79A7",  # Magenta (Okabe–Ito)
+  "C2H2 + Stem gas" = "#D55E00",  # Orange 
+  "Air"             = "#0072B2",  # Blue (Okabe–Ito)
+  "Stem gas"        = "#F0E442",  # Yellow (Okabe–Ito)
+  "Stem gas + CH4"  = "#009E73",  # Green-teal (Okabe–Ito)
+  "DFM"             = "#999999",  # Grey (Okabe–Ito)
+  "Control"         = "#56B4E9"   # Sky blue (Okabe–Ito)
+)
+
+
+
+# Plot
+p_15N <- ggplot(N15_reduced, aes(x = factor(incubation_time_days), y = ngN_g_day, fill = Treatment)) +
+  geom_boxplot(position = position_dodge(width = 0.8),
+               outlier.shape = NA,
+               width = 0.6,
+               alpha = 0.7,
+               linewidth = 0.4,
+               color = "black") +
+  geom_point(aes(fill = Treatment),
+             position = position_jitterdodge(jitter.width = 0, dodge.width = 0.8),
+             size = 1.8,
+             alpha = 0.8,
+             shape = 21,
+             color = "black",
+             stroke = 0.4) +
+  geom_vline(
+    xintercept = c(1.5, 2.5), # Halfway between 1&2 and 2&4 (if 4 is the 3rd factor level)
+    linetype = "dotted",
+    color = "black",
+    linewidth = 0.3
+  ) +
+  scale_fill_manual(values = full_treatment_colors_publication, 
+                    name = "Treatment",
+                    labels = c(expression(C[2]*H[2]~+~"Air"), expression(C[2]*H[2]~+~"Stem gas"), "Air", "Stem gas", expression("Stem gas"~+~CH[4]), "DFM", "Control"),
+                    breaks = c("C2H2 + Air", "C2H2 + Stem gas", "Air", "Stem gas", "Stem gas + CH4", "DFM", "Control"),
+                    expand = expansion(add = 0.5)) +
+  
+  labs(y = expression(N~fixation~rate~(ng~N~g^{-1}~day^{-1})),
+       x = "Incubation time (days)") +
+    scale_y_continuous(limits = c(0, 210),
+    expand = expansion(mult = c(0.02, 0.05))
+  ) +
+  theme_bw(base_size = 9) +
+  theme(
+    text = element_text(family = "sans", color="black"),   # Use Arial font
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_rect(color="black", fill=NA, linewidth = 0.5),
+    axis.ticks = element_line(color = "black", linewidth = 0.4),
+    axis.ticks.length = unit(2, "pt"),
+    axis.text.x = element_text(color = "black", size = 9),
+    axis.text.y = element_text(color = "black", size = 9),
+    axis.title.y = element_text(color = "black", size = 11, margin = margin(r=5)),
+    axis.title.x = element_text(color = "black", size = 11, margin = margin(t = 5)),
+    legend.position = c(0.01, 0.99), 
+    legend.justification = c(0, 1),
+    legend.title = element_blank(),
+    legend.text = element_text(color = "black", size = 8),
+    legend.text.align = 0,
+    legend.background = element_blank(),
+    legend.spacing.y = unit(1, "mm"),
+    legend.box.spacing = unit(1, "mm"),
+    plot.margin = margin(5, 5, 5, 5, "mm"),
+    legend.key.size = unit(4, "mm"),
+  )
+
+ggsave("Nfix_15N_Fig3_v3.png", 
+         plot = p_15N, 
+         width = 180, height = 130, units = "mm", dpi = 300)
+  
+ggsave("Nfix_15N_Fig3_v2.pdf",
+       plot = p_15N,
+       width = 180, height = 130, units = "mm",
+       device = cairo_pdf,
+       dpi = 300)
+
+  print(p_15N)
+  
+
+  
+```
+
+
+## Hypothesis testing:
+
+- ANOVA 2 ways: Gas Cocktail vs Air vs C2H2 vs DFM vs Controls 
+```{r}
+
+anova_model_N15 <- aov(ngN_g_day~ Treatment*incubation_time_days, data = N15_reduced)
+
+summary(anova_model_N15)
+```
+  - ANOVA assumptions
+```{r}
+
+residuals_N15<-residuals(anova_model_N15)
+
+qqnorm(residuals_N15)
+qqline(residuals_N15, col = "red")
+hist(residuals_N15)
+shapiro.test(residuals_N15)
+
+leveneTest(ngN_g_day~ Treatment*incubation_time_days , data = N15_reduced)
+
+
+```
+- Data not normal. Let's try to use the function Boxcox to determine the best transformation:
+```{r}
+lm_model <- lm(ngN_g_day ~ Treatment * incubation_time_days, data= N15_reduced)
+
+Boxcox_Result <- boxcox(lm_model)
+
+lambda_best <- Boxcox_Result$x[which.max(Boxcox_Result$y)]
+print(lambda_best)
+```
+
+- Transformation of data and ANOVA 
+```{r}
+
+N15_reduced$boxcox_transformed <- (N15_reduced$ngN_g_day^lambda_best - 1) / lambda_best
+
+anova_model_N15_transformed <- aov(boxcox_transformed~ Treatment*incubation_time_days, data = N15_reduced)
+
+summary(anova_model_N15_transformed)
+residuals_N15_transformed<-residuals(anova_model_N15_transformed)
+
+qqnorm(residuals_N15_transformed)
+qqline(residuals_N15_transformed, col = "red")
+hist(residuals_N15_transformed)
+shapiro.test(residuals_N15_transformed)
+
+leveneTest(boxcox_transformed~ Treatment*incubation_time_days , data = N15_reduced)
+
+emm_15N_aov_transformed_treatment <- emmeans(anova_model_N15_transformed, ~ Treatment|incubation_time_days)
+pw_comp_15N_aov_transformed_treatment <- pairs(emm_15N_aov_transformed_treatment, adjust = "BH")
+print(pw_comp_15N_aov_transformed_treatment)
+write.table(pw_comp_15N_aov_transformed_treatment, "pairwise_results_15N_aov_transformed_treatment.txt", sep = "\t")
+
+emm_15N_aov_transformed_time <- emmeans(anova_model_N15_transformed, ~ incubation_time_days|Treatment)
+pw_comp_15N_aov_transformed_time <- pairs(emm_15N_aov_transformed_time, adjust = "BH")
+print(pw_comp_15N_aov_transformed_time)
+write.table(pw_comp_15N_aov_transformed_time, "pairwise_results_15N_aov_transformed_time.txt", sep = "\t")
+
+
+```
+- GLMs 
+```{r}
+glm_model_15N <- glm(ngN_g_day ~ Treatment * incubation_time_days, 
+                     family = Gamma(link = "log"), 
+                     data = N15_reduced)
+summary(glm_model_15N)
+car::Anova(glm_model_15N, type = "III", test.statistic = "F")
+
+```
+  - Check assumptions of GLM
+```{r}
+ggplot(data.frame(x1=N15_reduced$Treatment, pearson=residuals(glm_model_15N, type="pearson")),
+       aes(x=N15_reduced$Treatment, y=pearson))+geom_point() +theme_bw()
+plot(glm_model_15N)
+shapiro.test(residuals(glm_model_15N))
+leveneTest(glm_model_15N)
+
+# DHARMa simulated residuals
+sim_res_15N <- simulateResiduals(glm_model_15N)
+plot(sim_res_15N)
+testResiduals(sim_res_15N)
+
+AIC(glm_model_15N)
+AIC(anova_model_N15_transformed)
+
+
+```
+
+- Pairwise comparisons using Tukey's test
+```{r}
+
+# Pairwise comparisons for Treatment at each level of incubation_time_days
+pw_comp_15Nglm_treatment<- emmeans(glm_model_15N, ~ Treatment | incubation_time_days)
+print(pairs(pw_comp_15Nglm_treatment, adjust = "Tukey"))
+
+write.table(pairs(pw_comp_15Nglm_treatment, adjust = "Tukey"),
+            "pw_comp_15Nglm_treatment.txt", sep = "\t")
+
+pw_comp_15Nglm_time <- emmeans(glm_model_15N, ~ incubation_time_days | Treatment)
+print(pairs(pw_comp_15Nglm_time, adjust = "Tukey"))
+
+write.table(pairs(pw_comp_15Nglm_time, adjust = "Tukey"),
+            "pw_comp_15Nglm_time.txt", sep = "\t")
+```
+
+
+
+- Prediction values:
+```{r}
+# Add predicted values to your dataset
+N15_reduced$predicted_values <- predict(glm_model_15N, type = "response")
+summary(N15_reduced)
+
+```
+
+- Residual plot:
+
+```{r}
+# Calculate residuals
+N15_reduced$residuals <- residuals(glm_model_15N, type = "deviance")
+
+# Plot residuals
+ggplot(N15_reduced, aes(x = predicted_values, y = residuals, color = Treatment)) +
+  geom_point(size = 3) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  labs(title = "Residuals Plot",
+       x = "Predicted Values",
+       y = "Residuals") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  scale_color_brewer(palette = "Set3")
+
+```
+
+The model is better with the GLM.
+
+
+# ARA vs 15N2 method 
+
+## Questions: 
+- Differences in N fixation between treatments
+- Differences in N fixation between methods used
+- Differences in N fixation between incubation times
+
+## View the data and structure the data
+- Create a new column N fixation rates combining N fix rates from ARA and 15N method. Then add a column called method to be able to compare both methods. all=FALSE to remove the treatments that are not shared between method (NA)
+
+```{r}
+ARA_vs_15N_4days <- read.csv("Data/ARA_vs_15N_data.csv", stringsAsFactors = TRUE)
+ARA_vs_15N_4days$incubation_time_days<-as.factor(ARA_vs_15N_4days$incubation_time_days)
+
+```
+- Rename the Methods values to ARA and 15N
+
+- Select only the columns of interest
+
+```{r}
+write.table(ARA_vs_15N_4days, "ARA_vs_15N_4days.txt", sep = "\t")
+```
+
+## Data visualisation
+
+- Summarise the data
+```{r, message=FALSE}
+#Version 1
+ARA_vs_15N_4days_summary <- ARA_vs_15N_4days %>% group_by(Treatment, Method) %>% 
+  dplyr::summarise(
+    mean_Nfix = mean(N_Fixation_Rates_ngN_g_day), 
+    min_Nfix = min(N_Fixation_Rates_ngN_g_day),
+    max_Nfix = max(N_Fixation_Rates_ngN_g_day),
+    se_Nfix = sd(N_Fixation_Rates_ngN_g_day)/sqrt(n())
+  )
+print(ARA_vs_15N_4days_summary)
+write.table(ARA_vs_15N_4days_summary, "N_fix_rates_summary_ARA_vs_15N.txt", sep = "\t")
+
+```
+
+- Plot the data
+```{r, echo=FALSE}
+
+method_colors <- c(
+  "15N2"      = "#009E73",
+  "ARA" = "#D55E00")
+
+# Plot
+p_ARA_vs_15N <- ggplot(ARA_vs_15N_4days, aes(x = Treatment, y = N_Fixation_Rates_ngN_g_day, fill = Method)) +
+  geom_boxplot(position = position_dodge(width = 0.75),
+               outlier.shape = NA,
+               width = 0.6,
+               alpha = 0.7,
+               linewidth = 0.5,
+               color = "black") +
+  geom_point(aes(fill = Method),
+             position = position_jitterdodge(jitter.width = 0, dodge.width = 0.75),
+             size = 2,
+             alpha = 0.8,
+             shape = 21,
+             color = "black",
+             stroke = 0.5) +
+  scale_fill_manual(values = method_colors, 
+                    name = "Method",
+                    labels = c(expression({}^15*N[2]), "ARA"),
+                    breaks = c("15N2", "ARA")) +
+  scale_x_discrete(
+    # Assuming your current Treatment labels in the data are "C2H2 + stem gas" and "C2H2 + air"
+    labels = c(
+      expression(C[2]*H[2]~+~"Air"), # C[2]H[2] for subscripts, use ~ for spacing
+      expression(C[2]*H[2]~+~"Stem gas"), "Stem gas")) +
+  labs(y = expression(N~fixation~rate~(ng~N~g^{-1}~day^{-1})),
+       x = "Treatment") +
+  annotate(
+    "text",
+    x = 2.81, y = 153, 
+    label = "**", 
+    color = "black", 
+    size = 4 
+  ) +
+    scale_y_continuous(limits = c(0, 155),
+    expand = expansion(mult = c(0.05, 0.1))
+  ) +
+  theme_bw(base_size = 9) +
+  theme(
+    text = element_text(family = "sans", color="black"),   # Use Arial font
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_rect(color="black", fill=NA, linewidth = 0.5),
+    axis.ticks = element_line(color = "black", linewidth = 0.4),
+    axis.ticks.length = unit(2, "pt"),
+    axis.text.x = element_text(color = "black", size = 9),
+    axis.text.y = element_text(color = "black", size = 9),
+    axis.title.y = element_text(color = "black", size = 11, margin = margin(r=5)),
+    axis.title.x = element_text(color = "black", size = 11, margin = margin(t = 5)),
+    legend.position = c(0.02, 0.98), 
+    legend.justification = c(0, 1),
+    legend.title = element_blank(),
+    legend.text = element_text(color = "black", size = 9),
+    legend.background = element_blank(),
+    legend.spacing.y = unit(0.5, "mm"),
+    legend.box.spacing = unit(1, "mm"),
+    plot.margin = margin(5, 5, 5, 5, "mm"),
+    legend.key.size = unit(5, "mm"),
+  )
+
+  ggsave("ARA_vs_15N_Fig2.png", 
+         plot = p_ARA_vs_15N, 
+         width = 140, height = 110, units = "mm", dpi = 300)
+  
+ggsave("ARA_vs_15N_Fig2.pdf",
+       plot = p_ARA_vs_15N,
+       width = 140, height = 110, units = "mm",
+       device = cairo_pdf,
+       dpi = 300)
+
+  print(p_ARA_vs_15N)
+
+```
+
+## Stats
+
+- 2-way ANOVA (only consider Method and Treatment after 4 days incubation to simplify)
+```{r}
+#Version 1
+anova_ARAvs_15N<-aov(N_Fixation_Rates_ngN_g_day~Treatment+Method+Treatment*Method, data=ARA_vs_15N_4days)
+summary(anova_ARAvs_15N)
+
+
+```
+
+- ANOVA assumptions
+
+```{r}
+#Version1
+residuals_ARA_vs_15N<-residuals(anova_ARAvs_15N)
+qqnorm(residuals_ARA_vs_15N)
+qqline(residuals_ARA_vs_15N, col = "red")
+hist(residuals_ARA_vs_15N)
+shapiro.test(residuals_ARA_vs_15N)
+leveneTest(N_Fixation_Rates_ngN_g_day~ Treatment, data = ARA_vs_15N_4days)
+
+```
+
+
+- GLM model using family gamma log
+```{r}
+#Version 1
+
+glm_model_ARA_vs_15N_log <- glm(N_Fixation_Rates_ngN_g_day ~ Treatment*Method, 
+                     family = Gamma(link = "log"), 
+                     data = ARA_vs_15N_4days)
+summary(glm_model_ARA_vs_15N_log)
+
+car::Anova(glm_model_ARA_vs_15N_log, type = "III", test.statistic = "F")
+
+```
+
+  - Assumptions of the GLM model
+```{r}
+#version1
+ggplot(data.frame(x1=ARA_vs_15N_4days$Treatment, pearson=residuals(glm_model_ARA_vs_15N_log, type="pearson")),
+       aes(x=x1, y=pearson))+geom_point() +theme_bw()
+plot(glm_model_ARA_vs_15N_log)
+
+shapiro.test(residuals(glm_model_ARA_vs_15N_log))
+leveneTest(glm_model_ARA_vs_15N_log)
+
+
+# DHARMa simulated residuals
+sim_res_ARA_vs_15N <- simulateResiduals(glm_model_ARA_vs_15N_log)
+plot(sim_res_ARA_vs_15N)
+testResiduals(sim_res_ARA_vs_15N)
+```
+
+
+Skewed Distribution: Nitrogen fixation rates often follow a right-skewed distribution (many small values and a few large values), and the log link is well-suited for handling this kind of data by modeling the exponential relationship between predictors and the response variable.
+
+Interpretability: The log link provides more straightforward interpretation, as the coefficients represent percentage changes in nitrogen fixation rates, which is intuitive in ecological studies where rates often scale multiplicatively (e.g., "a doubling of the rate in response to this factor").
+
+
+
+- Pairwise comparisons using two methods (Version 1-considering stem gas as endogenous control)
+```{r}
+#Version 1
+
+# Pairwise comparisons for Treatment 
+pw_comp_15N_ARA_treatment<- emmeans(glm_model_ARA_vs_15N_log, ~ Treatment | Method)
+print(pairs(pw_comp_15N_ARA_treatment, adjust = "tukey"))
+
+write.table(pairs(pw_comp_15N_ARA_treatment, adjust = "tukey"),
+            "pw_comp_15N_ARA_treatment.txt", sep = "\t")
+
+# Pairwise comparisons for method 
+pw_comp_15N_ARA_method <- emmeans(glm_model_ARA_vs_15N_log, ~ Method | Treatment)
+print(pairs(pw_comp_15N_ARA_method, adjust = "tukey"))
+
+write.table(pairs(pw_comp_15N_ARA_method, adjust = "tukey"),
+            "pw_comp_15N_ARA_method.txt", sep = "\t")
+
+# Pairwise comparisons for method 
+pw_comp_15N_ARA_method_treatment <- emmeans(glm_model_ARA_vs_15N_log, ~ Method * Treatment)
+print(pairs(pw_comp_15N_ARA_method_treatment, adjust = "tukey"))
+
+write.table(pairs(pw_comp_15N_ARA_method_treatment, adjust = "tukey"),
+            "pw_comp_15N_ARA_method.txt", sep = "\t")
+```
+
+
